@@ -1,9 +1,10 @@
 # Bloch Simulator
 Bloch simulator for NMR and MRI education.
 
-## GitHub Pages Compatibility
+## Extended Features
+1. Adjusted original Hanson version for GitHub Pages hosting: https://mzaiss.github.io/Bloch-Simulator/
 
-This fork modifies the original Hanson version for GitHub Pages hosting.
+2. Added new Mixed Matter(2) for simpler IR explanation, matching an educational Jupyter Notebook https://colab.research.google.com/drive/1TJN8GDrTkvTlweFGjkLvl_pGwu-2J9vm
 
 ### Changes Made
 
