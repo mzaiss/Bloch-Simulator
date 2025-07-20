@@ -694,18 +694,18 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 				      white, nullvec, nElem,
 				      true, 0, 0.2, M0, 0.0008); } //showCurve, dR1, dR2, M0, dRadius
 	    
-	    // Brain tissue realistic T1/T2 values at 3T
+	    // Brain tissue realistic T1/T2 values at 3T (with global T1=8s, T2=5s)
 	    function IsocGrayMatter() { let M0 = 1.0;
 				  return new Isoc(
 				      new THREE.Vector3(0, 0, M0), 
 				      new THREE.Color(0x666666), nullvec, nElem, // gray color
-				      true, 0.75, 10, M0, 0.001); } //T1=1.33s, T2=0.1s
+				      true, 0.627, 9.8, M0, 0.001); } // Effective: T1=1.33s, T2=0.1s
 	    
 	    function IsocCSF() { let M0 = 0.95;
 				  return new Isoc(
 				      new THREE.Vector3(0, 0, M0), 
 				      cyan, nullvec, nElem,
-				      true, 0.23, 0.48, M0, 0.0005); } //T1=4.3s, T2=2.1s
+				      true, 0.108, 0.276, M0, 0.0005); } // Effective: T1=4.3s, T2=2.1s
 	    function IsocNX() { return new Isoc(nx, white, nullvec); }
 	    function IsocNY() { return new Isoc(ny, white, nullvec); }
 	    function IsocNZ() { return new Isoc(nz, white, nullvec); }
@@ -810,6 +810,13 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 		return isocs;
 	    }
 	    
+	    scenes.Substances2 = function () {
+		let isocs = {IsocArr: [IsocGrayMatter(), IsocCSF()]};
+		isocs.IsocArr[0].dB0 = 0;     // Gray matter on-resonance
+		isocs.IsocArr[1].dB0 = 0.02;  // CSF slightly off-resonance
+		return isocs;
+	    }
+	    
 	    scenes.MixedMatter = function () {
 		Object.assign(state, basicState);
 		state.T1 = 8;
@@ -819,13 +826,10 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 	    }
 	    
 	    scenes.BrainTissue = function () {
-		let isocs = {IsocArr: [IsocGrayMatter(), IsocCSF()]};
-		isocs.IsocArr[0].dB0 = 0;     // Gray matter on-resonance
-		isocs.IsocArr[1].dB0 = 0.02;  // CSF slightly off-resonance
 		Object.assign(state, basicState);
-		state.T1 = 2;  // Global T1 (will be overridden by individual isoc values)
-		state.T2 = 1;  // Global T2 (will be overridden by individual isoc values)
-		Object.assign(state, isocs);
+		state.T1 = 8;  // Same global T1 as mixed matter
+		state.T2 = 5;  // Same global T2 as mixed matter  
+		Object.assign(state, scenes.Substances2());
 		return {viewMx: false, viewMxy: true};
 	    }
 
