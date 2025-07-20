@@ -40,6 +40,12 @@ happens in spare time, bug reports and software suggestions may largely be ignor
   <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
   <script src="https://ajax.googleapis.com/ajax/libs/jqueryui/1.12.1/jquery-ui.min.js"></script>
   <link rel="stylesheet" href="https://code.jquery.com/ui/1.12.1/themes/base/jquery-ui.min.css"> 
+  
+  <!-- THREE.js and dat.gui via UMD builds for GitHub Pages compatibility -->
+  <script src="https://unpkg.com/three@0.132.2/build/three.min.js"></script>
+  <script src="https://unpkg.com/three@0.132.2/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://unpkg.com/dat.gui@0.7.7/build/dat.gui.min.js"></script>
+  
   <!-- Check https://learn.jquery.com/jquery-ui/getting-started/ for intro. -->
   <!-- jquery-mobile seems not worth the effort in this case. -->
 
@@ -49,40 +55,72 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 <script src="js/THREEx.WindowResize.js"></script> //Could possibly have saved some trouble.
 -->
 
-<link rel="manifest" href="manifest.json">
+<!-- <link rel="manifest" href="manifest.json"> -->
 
 </head>
 
 <body style="overflow: hidden">
 
-  <script type="module">
+  <script>
     
-    // Jquery support of ES6 differs from other imported modules, and fails:
-    //   var $ = require( "https://unpkg.com/jquery/dist/jquery.js" );﻿  or
-    //   import {$,jQuery} from "https://unpkg.com/jquery/dist/jquery.js";
-    //   window.$ = $; // Expose to other imports.
-    //   window.jQuery = jQuery; // Expose to other imports.
-    // It requires extra require-module and becomes messy.
-
-    import * as dat from "https://unpkg.com/dat.gui/build/dat.gui.module.js";
-
-    // Apparantly selective modular import makes no difference compared to
-    import * as THREE from "https://unpkg.com/three/build/three.module.js";
-    // This list of functions seem to play no role, and size is independent.
-    // It is commented out since THREE otherwise have to be removed, except
-    // in webpack-version.
-    // import { Vector2, Vector3, Color, MeshBasicMaterial, MeshLambertMaterial,
-    // 	     Matrix4, Quaternion, CylinderBufferGeometry, Mesh, CircleGeometry,
-    // 	     PlaneGeometry, PlaneBufferGeometry, CircleBufferGeometry,
-    // 	     PerspectiveCamera, AmbientLight, DirectionalLight,
-    // 	     DirectionalLightHelper, FontLoader, TextBufferGeometry,
-    // 	     WebGLRenderer, Scene, AxisHelper} from "https://unpkg.com/three/build/three.module.js";
-
-    import { OrbitControls } from "https://unpkg.com/three/examples/jsm/controls/OrbitControls.js"; //imports from three.module.js, so only get Three from there.
-    import { WEBGL } from "https://unpkg.com/three/examples/jsm/WebGL.js";
-
+    // Using global variables instead of ES6 imports for GitHub Pages compatibility
+    // THREE, dat, and THREE.OrbitControls are loaded via script tags above
+    
     "use strict"; // strict mode to avoid implicit globals added to global object "window".
     // Variables declared here are added to "window". Prefer variables local to app.
+    
+    // Check if dependencies loaded correctly
+    if (typeof THREE === 'undefined') {
+        console.error('THREE.js not loaded');
+        alert('Error: THREE.js failed to load. Please check your internet connection.');
+    }
+    
+    if (typeof dat === 'undefined') {
+        console.error('dat.gui not loaded');
+        alert('Error: dat.gui failed to load. Please check your internet connection.');
+    }
+    
+    // WEBGL check - inline the WEBGL check since we can't import it as a module
+    var WEBGL = {
+        isWebGLAvailable: function () {
+            try {
+                var canvas = document.createElement( 'canvas' );
+                return !! ( window.WebGLRenderingContext && ( canvas.getContext( 'webgl' ) || canvas.getContext( 'experimental-webgl' ) ) );
+            } catch ( e ) {
+                return false;
+            }
+        },
+        getWebGLErrorMessage: function () {
+            return this.getErrorMessage( 1 );
+        },
+        getErrorMessage: function ( version ) {
+            var names = {
+                1: 'WebGL',
+                2: 'WebGL 2'
+            };
+            var contexts = {
+                1: window.WebGLRenderingContext,
+                2: window.WebGL2RenderingContext
+            };
+            var message = 'Your browser does not seem to support <a href="http://khronos.org/webgl/wiki/Getting_a_WebGL_Implementation" style="color:#000">WebGL</a>';
+            var element = document.createElement( 'div' );
+            element.id = 'webglmessage';
+            element.style.fontFamily = 'monospace';
+            element.style.fontSize = '13px';
+            element.style.fontWeight = 'normal';
+            element.style.textAlign = 'center';
+            element.style.background = '#fff';
+            element.style.color = '#000';
+            element.style.padding = '1.5em';
+            element.style.width = '400px';
+            element.style.margin = '5em auto 0';
+            if ( contexts[ version ] ) {
+                message = 'Your graphics card does not seem to support <a href="http://khronos.org/webgl/wiki/Getting_a_WebGL_Implementation" style="color:#000">' + names[ version ] + '</a>';
+            }
+            element.innerHTML = message;
+            return element;
+        }
+    };
 
     var camera, controls, renderer;
     var offsetHeight = 0;
@@ -1274,7 +1312,7 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 	    camera.up.set( 0, 0, 1 );
 	    camera.position.set (2.4, 5.6, 1.5); //probe camera.position for good coords.
 	    // Viewing angle/zoom control (no keybindings except panning):
-	    controls = new OrbitControls( camera, renderer.domElement );
+	    	controls = new THREE.OrbitControls( camera, renderer.domElement );
 	    controls.enablePan = false; //avoid using arrow keys (panning).
 	    controls.saveState();
 	    
