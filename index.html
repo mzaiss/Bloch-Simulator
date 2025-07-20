@@ -696,18 +696,18 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 				      white, nullvec, nElem,
 				      true, 0, 0.2, M0, 0.0008); } //showCurve, dR1, dR2, M0, dRadius
 	    
-	    // Brain tissue - simplified for debugging
+	    // Mixed matter (2) - simplified for debugging using existing working colors
 	    function IsocGrayMatter() { let M0 = 1.0;
 				  return new Isoc(
 				      new THREE.Vector3(0, 0, M0), 
-				      gray, nullvec, nElem,
-				      true, 0.2, 0.2, M0, 0.001); } // Same as original blue for testing
+				      white, nullvec, nElem,
+				      true, 0.2, 0.2, M0, 0.001); } // Same as original blue parameters
 	    
 	    function IsocCSF() { let M0 = 0.91;
 				  return new Isoc(
 				      new THREE.Vector3(0, 0, M0), 
 				      green, nullvec, nElem,
-				      true, 0, 0, M0, 0); } // Same as original green for testing
+				      true, 0, 0, M0, 0); } // Same as original green parameters
 	    function IsocNX() { return new Isoc(nx, white, nullvec); }
 	    function IsocNY() { return new Isoc(ny, white, nullvec); }
 	    function IsocNZ() { return new Isoc(nz, white, nullvec); }
@@ -981,13 +981,17 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 		frameFixed = true;
 		state.Sample = 'Line, structured';
 		$("#Presets").css('color', '#ffffff'); break;
-	    case 'Mixed matter':
-		state = Object.assign(state, scenes.MixedMatter());
+	    case 'Mixed matter (3)':
+		if (state.Sample == '3 substances') break; // Don't reapply if already active
+		state = Object.assign(state, scenes.Substances3());
+		state.T1 = 8; state.T2 = 5; // Set global relaxation times
 		state.Sample = '3 substances';
 		frameFixed = false;
 		$("#Presets").css('color', '#ffffff');  break;
-	    case 'Brain tissue':
-		state = Object.assign(state, scenes.BrainTissue());
+	    case 'Mixed matter (2)':
+		if (state.Sample == 'GM & CSF') break; // Don't reapply if already active
+		state = Object.assign(state, scenes.Substances2());
+		state.T1 = 8; state.T2 = 5; // Set global relaxation times
 		state.Sample = 'GM & CSF';
 		frameFixed = false;
 		$("#Presets").css('color', '#ffffff');  break; /* Sample-changes from here: */
@@ -1494,9 +1498,9 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 		trigSampleChange = true; break;
 	    case "Inhomogeneity" : state.Sample = "Inhomogeneity";
 		trigSampleChange = true; break;
-	    case "Mixed matter" : state.Sample = "Mixed matter";
+	    case "Mixed matter (3)" : state.Sample = "Mixed matter (3)";
 		trigSampleChange = true; break;
-	    case "Brain tissue" : state.Sample = "Brain tissue";
+	    case "Mixed matter (2)" : state.Sample = "Mixed matter (2)";
 		trigSampleChange = true; break;
 	    case "Weak gradient" : state.Sample = "Weak gradient";
 		trigSampleChange = true; break;
@@ -1634,7 +1638,8 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 		    if ((this.id != "Presets") || (label == "Saved") || reloadSceneResetsParms) {
 			buttonAction(label);
 		    } else {
-			trigSampleChange = true;
+			// For Presets button, also call buttonAction to update state.Sample
+			buttonAction(label);
 		    }
 		})
                 .next() // format right part
@@ -2375,8 +2380,8 @@ happens in spare time, bug reports and software suggestions may largely be ignor
       <!-- Equilibrium menu item needs to be hidden if hideWhenSelected is true since
 	   that label is shown on button above. Otherwise comment hiding out. --> 
       <li id="Inhomogeneity"><a class="PresetsAction">Inhomogeneity</a></li>
-      		    <li id="Mixedmatter"><a class="PresetsAction">Mixed matter</a></li>
-		    <li id="Braintissue"><a class="PresetsAction">Brain tissue</a></li>
+      		    			<li id="Mixedmatter"><a class="PresetsAction">Mixed matter (3)</a></li>
+			<li id="Braintissue"><a class="PresetsAction">Mixed matter (2)</a></li>
       <li id="Weakgradient"><a class="PresetsAction">Weak gradient</a></li>
       <li id="Stronggradient"><a class="PresetsAction">Strong gradient</a></li>
       <li id="Structure"><a class="PresetsAction">Structure</a></li>
