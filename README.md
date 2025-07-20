@@ -1,6 +1,5 @@
 # Bloch Simulator
-
-Interactive Bloch simulator for NMR and MRI education.
+Bloch simulator for NMR and MRI education.
 
 ## GitHub Pages Compatibility
 
