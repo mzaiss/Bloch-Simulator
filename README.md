@@ -53,6 +53,25 @@ This fork includes modifications to make the Bloch Simulator compatible with Git
 - ✅ Identical user interface and controls
 - ✅ Compatible with original documentation
 
+#### 🧪 **Mixed Matter Configurations**
+
+**Current "Mixed matter" (3 substances):**
+
+| Substance | Color | T1 (s) | T2 (s) | M0 | dB0 | Notes |
+|-----------|-------|--------|--------|----|----|-------|
+| 1 | Blue | 5.0 | 5.0 | 1.0 | 0 | Generic tissue |
+| 2 | Green | ∞ | ∞ | 0.91 | -0.04 | No relaxation |
+| 3 | White | ∞ | 5.0 | 0.91 | 0.04 | T2-only relaxation |
+
+**New "Brain tissue" (2 substances):**
+
+| Substance | Color | T1 (s) | T2 (s) | M0 | dB0 | Tissue Type |
+|-----------|-------|--------|--------|----|----|-------------|
+| 1 | Gray | 1.33 | 0.1 | 1.0 | 0 | Gray Matter (3T) |
+| 2 | Cyan | 4.3 | 2.1 | 0.95 | 0.02 | CSF (3T) |
+
+*Note: Brain tissue values are realistic for 3 Tesla MRI*
+
 ### 🐛 **Known Issues**
 - Requires internet connection for CDN dependencies
 - Some older browsers may have CORS restrictions with local files

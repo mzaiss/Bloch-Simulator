@@ -693,6 +693,19 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 				      new THREE.Vector3(0, 0, M0), 
 				      white, nullvec, nElem,
 				      true, 0, 0.2, M0, 0.0008); } //showCurve, dR1, dR2, M0, dRadius
+	    
+	    // Brain tissue realistic T1/T2 values at 3T
+	    function IsocGrayMatter() { let M0 = 1.0;
+				  return new Isoc(
+				      new THREE.Vector3(0, 0, M0), 
+				      new THREE.Color(0x666666), nullvec, nElem, // gray color
+				      true, 0.75, 10, M0, 0.001); } //T1=1.33s, T2=0.1s
+	    
+	    function IsocCSF() { let M0 = 0.95;
+				  return new Isoc(
+				      new THREE.Vector3(0, 0, M0), 
+				      cyan, nullvec, nElem,
+				      true, 0.23, 0.48, M0, 0.0005); } //T1=4.3s, T2=2.1s
 	    function IsocNX() { return new Isoc(nx, white, nullvec); }
 	    function IsocNY() { return new Isoc(ny, white, nullvec); }
 	    function IsocNZ() { return new Isoc(nz, white, nullvec); }
@@ -802,6 +815,17 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 		state.T1 = 8;
 		state.T2 = 5;
 		Object.assign(state, scenes.Substances3());
+		return {viewMx: false, viewMxy: true};
+	    }
+	    
+	    scenes.BrainTissue = function () {
+		let isocs = {IsocArr: [IsocGrayMatter(), IsocCSF()]};
+		isocs.IsocArr[0].dB0 = 0;     // Gray matter on-resonance
+		isocs.IsocArr[1].dB0 = 0.02;  // CSF slightly off-resonance
+		Object.assign(state, basicState);
+		state.T1 = 2;  // Global T1 (will be overridden by individual isoc values)
+		state.T2 = 1;  // Global T2 (will be overridden by individual isoc values)
+		Object.assign(state, isocs);
 		return {viewMx: false, viewMxy: true};
 	    }
 
@@ -954,6 +978,11 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 	    case 'Mixed matter':
 		state = Object.assign(state, scenes.MixedMatter());
 		state.Sample = '3 substances';
+		frameFixed = false;
+		$("#Presets").css('color', '#ffffff');  break;
+	    case 'Brain tissue':
+		state = Object.assign(state, scenes.BrainTissue());
+		state.Sample = 'GM & CSF';
 		frameFixed = false;
 		$("#Presets").css('color', '#ffffff');  break; /* Sample-changes from here: */
 	    case '1 isochromate': 
@@ -1460,6 +1489,8 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 	    case "Inhomogeneity" : state.Sample = "Inhomogeneity";
 		trigSampleChange = true; break;
 	    case "Mixed matter" : state.Sample = "Mixed matter";
+		trigSampleChange = true; break;
+	    case "Brain tissue" : state.Sample = "Brain tissue";
 		trigSampleChange = true; break;
 	    case "Weak gradient" : state.Sample = "Weak gradient";
 		trigSampleChange = true; break;
@@ -2338,7 +2369,8 @@ happens in spare time, bug reports and software suggestions may largely be ignor
       <!-- Equilibrium menu item needs to be hidden if hideWhenSelected is true since
 	   that label is shown on button above. Otherwise comment hiding out. --> 
       <li id="Inhomogeneity"><a class="PresetsAction">Inhomogeneity</a></li>
-      <li id="Mixedmatter"><a class="PresetsAction">Mixed matter</a></li>
+      		    <li id="Mixedmatter"><a class="PresetsAction">Mixed matter</a></li>
+		    <li id="Braintissue"><a class="PresetsAction">Brain tissue</a></li>
       <li id="Weakgradient"><a class="PresetsAction">Weak gradient</a></li>
       <li id="Stronggradient"><a class="PresetsAction">Strong gradient</a></li>
       <li id="Structure"><a class="PresetsAction">Structure</a></li>
