@@ -346,6 +346,8 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 	const red = new THREE.Color( 'red' );
 	const blueStr = 'dodgerblue';
 	const blue = new THREE.Color( blueStr );
+	const gray = new THREE.Color( 'gray' );
+	const cyan = new THREE.Color( 'cyan' );
 
 	const nZeroSinc = 4; // 4 for 3-lobe sinc. Matching 0.22571 appears below.
 	// A sinc with same B1 and duration as rect has durCorrSinc area ratio.
@@ -694,18 +696,18 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 				      white, nullvec, nElem,
 				      true, 0, 0.2, M0, 0.0008); } //showCurve, dR1, dR2, M0, dRadius
 	    
-	    // Brain tissue realistic T1/T2 values at 3T (with global T1=8s, T2=5s)
+	    // Brain tissue - simplified for debugging
 	    function IsocGrayMatter() { let M0 = 1.0;
 				  return new Isoc(
 				      new THREE.Vector3(0, 0, M0), 
-				      new THREE.Color(0x666666), nullvec, nElem, // gray color
-				      true, 0.627, 9.8, M0, 0.001); } // Effective: T1=1.33s, T2=0.1s
+				      gray, nullvec, nElem,
+				      true, 0.2, 0.2, M0, 0.001); } // Same as original blue for testing
 	    
-	    function IsocCSF() { let M0 = 0.95;
+	    function IsocCSF() { let M0 = 0.91;
 				  return new Isoc(
 				      new THREE.Vector3(0, 0, M0), 
-				      cyan, nullvec, nElem,
-				      true, 0.108, 0.276, M0, 0.0005); } // Effective: T1=4.3s, T2=2.1s
+				      green, nullvec, nElem,
+				      true, 0, 0, M0, 0); } // Same as original green for testing
 	    function IsocNX() { return new Isoc(nx, white, nullvec); }
 	    function IsocNY() { return new Isoc(ny, white, nullvec); }
 	    function IsocNZ() { return new Isoc(nz, white, nullvec); }
