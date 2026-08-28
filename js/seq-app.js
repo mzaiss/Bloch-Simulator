@@ -4,8 +4,7 @@
 import {
     renderSeqPlot,
     setPlayhead,
-    hidePlayhead,
-    disposeSeqPlot
+    hidePlayhead
 } from "./seq-plot.js";
 
 const EXAMPLES = [
