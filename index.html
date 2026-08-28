@@ -46,6 +46,7 @@ happens in spare time, bug reports and software suggestions may largely be ignor
   <script src="https://unpkg.com/three@0.124.0/build/three.min.js"></script>
   <script src="https://unpkg.com/three@0.124.0/examples/js/controls/OrbitControls.js"></script>
   <script src="https://unpkg.com/dat.gui@0.7.7/build/dat.gui.min.js"></script>
+  <script src="js/pulseq.js"></script>
   
   <!-- Check https://learn.jquery.com/jquery-ui/getting-started/ for intro. -->
   <!-- jquery-mobile seems not worth the effort in this case. -->
@@ -1545,7 +1546,14 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 		if (frameFixed) gradPulse(2, Math.PI/2); break; //whatever area
 		
 	    case "Non-rep. exc." :
+		if (window.PulseqApp && window.PulseqApp.stopPlayback) window.PulseqApp.stopPlayback(true);
 		clearRepTimers();
+		break;
+
+	    case "Pulseq" :
+		$("#pulseqPanel").removeClass("collapsed");
+		var ex = document.getElementById("pulseqExample");
+		if (ex) ex.focus();
 		break;
 		
 	    case "[90°ₓ] TR=5s,spoiled" :
@@ -1747,7 +1755,8 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 	    addConfigButton("Refocus","SoftDrop"); 
 	    addConfigButton("Spoil","RefocusDrop");
 	    addConfigButton("RepExc","SpoilDrop");
-	    addButton("Pause", "RepExcDrop"); 
+	    addButton("Pause", "RepExcDrop");
+	    addButton("Pulseq", "Pause");
 	    closeMenuIfOpened("PresetsDrop");
 	    closeMenuIfOpened("ExcHardDrop");
 	    closeMenuIfOpened("SoftDrop");
@@ -1808,6 +1817,50 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 	    //	  THREEx.FullScreen.bindKey({ charCode : 'm'.charCodeAt(0) }); //Requires game extension.
 	    
 	} //init
+
+	window.BlochSimBridge = {
+	    getState: function () { return state; },
+	    markRfStart: function (seqPhase) {
+		state.tSinceRF = 0;
+		framePhase0 = framePhase;
+		state.phi1 = seqPhase;
+		state.RFfunc = RFconst;
+		state.B1freq = state.Gamma * state.B0;
+		lastB1freq = state.B1freq;
+	    },
+	    prepareForSeq: function () {
+		paused = false;
+		$("#Pause").button("option", "label", "||");
+		clearRepTimers();
+		state.RFfunc = RFconst;
+		state.B1 = 0;
+		state.Gx = 0;
+		state.Gy = 0;
+		state.tLeftRF = 0;
+		state.areaLeftRF = 0;
+		state.areaLeftGrad = 0;
+		state.B1freq = state.Gamma * state.B0;
+		framePhase0 = framePhase;
+		if (state.IsocArr) {
+		    state.IsocArr.forEach(function (isoc) {
+			var m0 = (isoc.M0 != null) ? isoc.M0 : 1;
+			isoc.M.set(0, 0, m0);
+		    });
+		}
+		updateMenuList.push(guiFieldsFolder);
+		updateMenuList.push(guiGradientsFolder);
+	    },
+	    clearSeqDrive: function () {
+		state.B1 = 0;
+		state.Gx = 0;
+		state.Gy = 0;
+		state.tLeftRF = 0;
+		state.areaLeftRF = 0;
+		state.areaLeftGrad = 0;
+		updateMenuList.push(guiFieldsFolder);
+		updateMenuList.push(guiGradientsFolder);
+	    }
+	};
 	
 	
 	function guiUpdate() {
@@ -2071,6 +2124,10 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 		dtTotal += dt; dtCount++;
 		dtMemory[ dtMemIndi ] = dt; //short term memory of dt 
 		dtMemIndi = (dtMemIndi + 1) % dtMemory.length;
+
+		if (typeof window.pulseqApplyTick === "function") {
+		    window.pulseqApplyTick(dt, state);
+		}
 		
 		let B1vec = BlochStep(dt);
 		let B1mag = B1vec.length(); 
@@ -2338,6 +2395,71 @@ happens in spare time, bug reports and software suggestions may largely be ignor
       .ui-button {
       padding-left: 0em;
       padding-right: 0em;}
+
+      #pulseqPanel {
+      position: absolute;
+      top: 268px;
+      right: 1%;
+      width: 380px;
+      z-index: 35;
+      background: #0f1424;
+      color: #e8ecff;
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 6px;
+      font-family: "Trebuchet MS", Helvetica, Arial, sans-serif;
+      font-size: 12px;
+      user-select: text;
+      -webkit-user-select: text;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+      }
+      #pulseqPanel.collapsed .pulseq-body { display: none; }
+      #pulseqHead {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 8px;
+      cursor: pointer;
+      background: #151b30;
+      border-radius: 6px 6px 0 0;
+      }
+      #pulseqHead strong { flex: 1; font-size: 12px; letter-spacing: 0.02em; }
+      #pulseqMeta { color: #9aa4bf; font-size: 11px; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      #pulseqToggle { color: #9aa4bf; background: none; border: 0; cursor: pointer; font-size: 14px; }
+      .pulseq-body { padding: 8px; }
+      .pulseq-controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 6px; }
+      .pulseq-controls select, .pulseq-controls button, .pulseq-file {
+      background: #1b2340;
+      color: #e8ecff;
+      border: 1px solid rgba(255,255,255,0.16);
+      border-radius: 4px;
+      height: 26px;
+      font-size: 12px;
+      }
+      .pulseq-controls button { padding: 0 10px; cursor: pointer; }
+      .pulseq-controls button:disabled { opacity: 0.45; cursor: default; }
+      #pulseqPlay { background: #2f6fed; border-color: #4c7fff; font-weight: bold; }
+      .pulseq-file { position: relative; overflow: hidden; display: inline-flex; align-items: center; padding: 0 8px; }
+      .pulseq-file input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+      #pulseqStatus { color: #a9b3da; font-size: 11px; line-height: 1.35; min-height: 2.6em; margin: 4px 0 6px; }
+      #pulseqStatus.error { color: #ff8a7a; }
+      #pulseqPlot { height: 280px; background: #0f1424; }
+      .seq-chartgpu-stack { position: relative; height: 100%; display: flex; flex-direction: column; }
+      .seq-chartgpu-panel { flex: 1 1 0; min-height: 44px; position: relative; }
+      .seq-canvas-panel { display: flex; flex-direction: column; }
+      .seq-canvas-panel canvas { flex: 1; width: 100%; min-height: 36px; }
+      .seq-canvas-label { position: absolute; left: 6px; top: 2px; font-size: 10px; color: #a9b3da; z-index: 2; pointer-events: none; }
+      .seq-chartgpu-fallback { color: #9aa4bf; font-size: 10px; padding: 2px 4px; }
+      .seq-playhead {
+      position: absolute;
+      top: 0; bottom: 0;
+      width: 2px;
+      background: #ff4d6d;
+      pointer-events: none;
+      z-index: 5;
+      box-shadow: 0 0 6px #ff4d6d;
+      }
+      .pulseq-speed { display: flex; align-items: center; gap: 4px; color: #9aa4bf; }
+      .pulseq-speed input { width: 72px; }
       
     </style>
     
@@ -2456,7 +2578,34 @@ happens in spare time, bug reports and software suggestions may largely be ignor
     <div class="EventButtons" style="position:absolute; bottom:3%">
       <button id="Pause" style="height:2em;width:2.5em;font-weight:bold">||<!--&#9646;&#9646;--></button> <!-- ⏸ -->
     </div>
+
+    <div class="EventButtons" style="position:absolute; bottom:3%">
+      <button id="Pulseq" style="height:2em;width:5.2em;background:#1b2340;color:#dce6ff">Pulseq</button>
+    </div>
 </div> <!-- Event menu ends -->
+
+<div id="pulseqPanel">
+  <div id="pulseqHead">
+    <strong>Pulseq</strong>
+    <span id="pulseqMeta"></span>
+    <button id="pulseqToggle" type="button" title="Collapse">▾</button>
+  </div>
+  <div class="pulseq-body">
+    <div class="pulseq-controls">
+      <select id="pulseqExample" title="Example sequences"></select>
+      <label class="pulseq-file">Load .seq
+        <input id="pulseqFile" type="file" accept=".seq,text/plain">
+      </label>
+      <button id="pulseqPlay" type="button" disabled>Play</button>
+      <label class="pulseq-speed">speed
+        <input id="pulseqSpeed" type="range" min="0.25" max="4" step="0.25" value="1">
+        <span id="pulseqSpeedLabel">1×</span>
+      </label>
+    </div>
+    <div id="pulseqStatus">Load a .seq file or pick an example, then Play.</div>
+    <div id="pulseqPlot"></div>
+  </div>
+</div>
   
   
 <div id="icons" class="icons" style="text-shadow: 1px 1px 2px white; position:absolute; bottom:10%; right:1%; width:20px"> 
@@ -2584,6 +2733,8 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 
     <p>The top-left menu item will help you get started. Enjoy!</p>
 </div>
+
+<script type="module" src="js/seq-app.js"></script>
 
 <!-- SocialMedia goes here. -->
 

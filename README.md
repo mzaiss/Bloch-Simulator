@@ -21,7 +21,22 @@ Bloch simulator for NMR and MRI education.
 ### Usage
 
 GitHub Pages: Fork repository, enable Pages in settings, see https://mzaiss.github.io/Bloch-Simulator/ 
-Local: Clone and open index.html (requires internet for CDN dependencies)
+Local: serve the folder over HTTP (needed for example `.seq` files and ChartGPU), e.g. `python3 -m http.server`, then open the page. Opening `index.html` as a file still works for the 3D sim; use **Load .seq** to pick a sequence without a server.
+
+### Pulseq
+
+Load a Pulseq `.seq` file (or pick an example). The sequence is shown as a ChartGPU `seq.plot` (same stacked RF / GX / GY / GZ / ADC view as [anyfield](https://github.com/mrx-org/anyfield/blob/main/pypulseq/seq_plot.js)). **Play** runs the waveforms on the Bloch simulator. Time is stretched so a short sequence is watchable; use the speed slider to go faster or slower.
+
+Example sequences (from [MRTwin_pulseq BlochSimWeb](https://github.com/mzaiss/MRTwin_pulseq/tree/mr0-core/BlochSimWeb)):
+
+- `seq/web1_FID.seq` — block-pulse FID, flip angles 30°…360°
+- `seq/web2_SpinEcho_me.seq` — 90° then a train of 180°s
+- `seq/web2_SpinEcho_sinc.seq` — sinc-pulse spin echo
+- `seq/web3_FLASH_16.seq` — 16-line FLASH
+- `seq/web4_RARE_16.seq` — 16-echo RARE
+- `seq/web5_EPI_16.seq` — 16-line EPI
+
+Parser tests: `node tests/pulseq.test.js`
 
 ### Mixed Matter Presets
 
