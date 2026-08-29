@@ -27,6 +27,8 @@ Local: serve the folder over HTTP (needed for example `.seq` files and ChartGPU)
 
 Load a Pulseq `.seq` file (or pick an example). The sequence is shown as a ChartGPU `seq.plot` (same stacked RF / GX / GY / GZ / ADC view as [anyfield](https://github.com/mrx-org/anyfield/blob/main/pypulseq/seq_plot.js)). **Play** runs the waveforms on the Bloch simulator. Time is stretched so a short sequence is watchable; use the speed slider to go faster or slower.
 
+Defaults: B0 rotating frame, B1 view (not torque/B1eff), and a circular lab floor so the rotating frame does not show a spinning rectangle. Sequences with gradients switch to the **Plane** sample on Play if the current scene has no spatial extent (Equilibrium, etc.), so Gx/Gy are visible across the spin sheet.
+
 Example sequences (from [MRTwin_pulseq BlochSimWeb](https://github.com/mzaiss/MRTwin_pulseq/tree/mr0-core/BlochSimWeb)):
 
 - `seq/web1_FID.seq` — block-pulse FID, flip angles 30°…360°
