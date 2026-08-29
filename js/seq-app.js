@@ -20,7 +20,10 @@ const EXAMPLES = [
 const TARGET_PLAY_S = 8;
 const MIN_STRETCH = 10;
 const MAX_STRETCH = 400;
-const GRAD_VIS = 0.012;
+// Pulseq Hz/m → educational Gx/Gy. 4000 Hz/m (typical EPI/FLASH readout) → Gx≈8,
+// similar to the built-in Strong/Weak gradient scenes. Do not divide by time-stretch:
+// stretch already lengthens how long G is applied; dividing hid gradients on the Plane.
+const GRAD_HZM_TO_EDU = 8 / 4000;
 
 var plotHost = {};
 var loaded = {
@@ -34,8 +37,17 @@ var player = {
     t: 0,
     stretch: 80,
     speed: 1,
-    rfWasOn: false
+    rfWasOn: false,
+    guiAge: 0
 };
+
+function waveformHasGradients(wf) {
+    if (!wf) return false;
+    for (var i = 0; i < wf.n; i++) {
+        if (Math.abs(wf.gx[i]) > 1 || Math.abs(wf.gy[i]) > 1 || Math.abs(wf.gz[i]) > 1) return true;
+    }
+    return false;
+}
 
 function $(id) { return document.getElementById(id); }
 
@@ -113,9 +125,13 @@ function stopPlayback(resetTime) {
 function startPlayback() {
     if (!loaded.waveforms) return;
     var bridge = window.BlochSimBridge;
+    if (waveformHasGradients(loaded.waveforms) && bridge && bridge.ensureSpatialSample) {
+        bridge.ensureSpatialSample();
+    }
     if (bridge && bridge.prepareForSeq) bridge.prepareForSeq();
     player.t = 0;
     player.rfWasOn = false;
+    player.guiAge = 0;
     player.playing = true;
     $("pulseqPlay").textContent = "Stop";
     setStatus("Playing " + loaded.name + "  (" +
@@ -162,8 +178,16 @@ function applyTick(dt, state) {
     state.tLeftRF = 0;
     state.areaLeftRF = 0;
     state.areaLeftGrad = 0;
-    state.Gx = (s.gx * GRAD_VIS) / stretch;
-    state.Gy = (s.gy * GRAD_VIS) / stretch;
+    state.Gx = s.gx * GRAD_HZM_TO_EDU;
+    state.Gy = s.gy * GRAD_HZM_TO_EDU;
+
+    player.guiAge += dt;
+    if (player.guiAge > 0.25) {
+        player.guiAge = 0;
+        if (window.BlochSimBridge && window.BlochSimBridge.markGradientsDirty) {
+            window.BlochSimBridge.markGradientsDirty();
+        }
+    }
 
     var fid = $("fidbox");
     if (fid) fid.style.backgroundColor = s.adc ? "rgba(255,80,40,0.18)" : "transparent";

@@ -724,8 +724,10 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 	    let basicState= {IsocArr:[], B1:0.0, Gamma:1, 
 			     B0:2.,
 //			     t:0, //removed to avoid resetting of FID. Seems ok.
-			     dt:0.01, phi1:0., T1:Infinity, T2:Infinity, B1freq: 5,
-			     Name:'', RFfunc:RFconst};
+			     dt:0.01, phi1:0., T1:Infinity, T2:Infinity, B1freq: 2,
+			     Name:'', RFfunc:RFconst,
+			     viewB1:true, viewTorqB1eff:false,
+			     FrameStat:false, FrameB0:true, FrameB1:false};
 	    
 	    scenes.Isoc1 = function () {
 		return {IsocArr:[IsocZ()]}};
@@ -1079,9 +1081,9 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 		    phi1: 0,  //RF phase in rotating frame.
 		    T1:1, T2:1,
 		    Gx:0, Gy:0,
-		    viewB1:false, viewTorqB1eff:true,
+		    viewB1:true, viewTorqB1eff:false,
 		    viewMxy:true, viewMx:true, viewMz:false, viewB1x:false, 
-		    FrameStat: true, FrameB0: false, FrameB1: false,
+		    FrameStat: false, FrameB0: true, FrameB1: false,
 		    Sample: '1 isochromate',
 		    allScale: 1,
 		    RFfunc: RFconst,
@@ -1256,8 +1258,8 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 			 'Gradients',
 			 function (guiFolder) {
 			     let tmp1 = state.Gx; let tmp2 = state.Gy; 
-			     guiFolder.add(state, 'Gx', -7, 7, 1);
-			     guiFolder.add(state, 'Gy', -7, 7, 1);
+			     guiFolder.add(state, 'Gx', -25, 25, 1);
+			     guiFolder.add(state, 'Gy', -25, 25, 1);
 			     state.Gx = tmp1;  state.Gy = tmp2;},
 			 cFolder++, createFromFolder--);
 	    
@@ -1737,8 +1739,10 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 	    shadowMaterialsInit(floorMaterial);
 	    floorCirc = floorInit('circle');
 	    floorRect = floorInit('rect');
-	    floor = floorRect;
+	    floor = floorCirc;
 	    scene.add(floor);
+	    var floorShapeIcon = document.getElementById('FloorShape');
+	    if (floorShapeIcon) floorShapeIcon.innerHTML = '⬜';
 	    
 	    state.Sample = "Precession";
 	    trigSampleChange = true;
@@ -1828,6 +1832,21 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 		state.B1freq = state.Gamma * state.B0;
 		lastB1freq = state.B1freq;
 	    },
+	    sampleHasSpatialExtent: function () {
+		if (!state.IsocArr) return false;
+		for (var i = 0; i < state.IsocArr.length; i++) {
+		    var p = state.IsocArr[i].pos;
+		    if (p && p.lengthSq() > 1e-8) return true;
+		}
+		return false;
+	    },
+	    ensureSpatialSample: function () {
+		if (window.BlochSimBridge.sampleHasSpatialExtent()) return;
+		state.Sample = "Plane";
+		trigSampleChange = true;
+		sampleChange();
+		$("#Presets").button("option", "label", "Plane");
+	    },
 	    prepareForSeq: function () {
 		paused = false;
 		$("#Pause").button("option", "label", "||");
@@ -1858,6 +1877,9 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 		state.areaLeftRF = 0;
 		state.areaLeftGrad = 0;
 		updateMenuList.push(guiFieldsFolder);
+		updateMenuList.push(guiGradientsFolder);
+	    },
+	    markGradientsDirty: function () {
 		updateMenuList.push(guiGradientsFolder);
 	    }
 	};
@@ -2609,7 +2631,7 @@ happens in spare time, bug reports and software suggestions may largely be ignor
   
   
 <div id="icons" class="icons" style="text-shadow: 1px 1px 2px white; position:absolute; bottom:10%; right:1%; width:20px"> 
-  <div id="FloorShape">◯</div><br>
+  <div id="FloorShape">⬜</div><br>
   <div id="XYZview">XYZ</div><br>
   <div id="ResetCamera" style="font-size:150%;">⏎</div><br>
 </div>

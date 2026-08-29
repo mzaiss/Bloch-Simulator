@@ -58,11 +58,23 @@ function almost(a, b, tol, msg) {
 
 (function testRareAndEpi() {
     var rare = Pulseq.parse(readSeq("web4_RARE_16.seq")).summary();
-    var epi = Pulseq.parse(readSeq("web5_EPI_16.seq")).summary();
+    var epi = Pulseq.parse(readSeq("web5_EPI_16.seq"));
+    var sum = epi.summary();
     assert.ok(rare.nRf > 1 && rare.duration > 0);
-    assert.ok(epi.nRf >= 1 && epi.duration > 0);
+    assert.ok(sum.nRf >= 1 && sum.duration > 0);
+    var wf = epi.rasterize(50e-6);
+    var maxGx = 0, maxGy = 0;
+    for (var i = 0; i < wf.n; i++) {
+        maxGx = Math.max(maxGx, Math.abs(wf.gx[i]));
+        maxGy = Math.max(maxGy, Math.abs(wf.gy[i]));
+    }
+    assert.ok(maxGx > 3000, "EPI Gx peak " + maxGx);
+    assert.ok(maxGy > 500, "EPI Gy peak " + maxGy);
+    var GRAD_HZM_TO_EDU = 8 / 4000;
+    var eduGx = maxGx * GRAD_HZM_TO_EDU;
+    assert.ok(eduGx > 4, "EPI educational Gx should be visible on Plane, got " + eduGx);
     console.log("ok RARE", rare);
-    console.log("ok EPI", epi);
+    console.log("ok EPI", sum, "maxGx", maxGx, "eduGx", eduGx.toFixed(2));
 })();
 
 (function testShapeDecompressBlockPulse() {
