@@ -9,12 +9,12 @@ export const CHARTGPU_MODULE_URL = "https://esm.sh/chartgpu@0.3.2?target=es2022"
 export const LAB_SHELL_BG = "#0f1424";
 
 const COLORS = {
-    rfRe: "#4ea1ff",
-    rfIm: "#7ee0ff",
-    gx: "#ff5c5c",
+    rf: "#ffe000", // matches the yellow B1 arrow in the 3D view
+    rfPhase: "#ff7a18",
+    gx: "#4ea1ff",
     gy: "#3dd68c",
-    gz: "#f0c14a",
-    adc: "#ff7a18"
+    gz: "#b48cff",
+    adc: "#ff3b30"
 };
 
 function isWebGpuAvailable() {
@@ -38,21 +38,37 @@ function msAxis(wf) {
     return t;
 }
 
+/** Magnitude and wrapped phase of the complex RF, as pypulseq's seq.plot shows them. */
+function rfMagnitudeAndPhase(plot) {
+    var mag = new Float64Array(plot.n);
+    var phase = new Float64Array(plot.n);
+    for (var i = 0; i < plot.n; i++) {
+        var re = plot.rfRe[i];
+        var im = plot.rfIm[i];
+        mag[i] = Math.sqrt(re * re + im * im);
+        phase[i] = mag[i] > 0 ? Math.atan2(im, re) : 0;
+    }
+    return { mag: mag, phase: phase };
+}
+
+function panel(title, name, color, x, y) {
+    return { title: title, series: [{ type: "line", name: name, color: color, data: seriesXY(x, y) }] };
+}
+
 export function buildPlotPanels(wf) {
     var plot = downsampleForPlot(wf, 5000);
     var tMs = msAxis(plot);
+    var rf = rfMagnitudeAndPhase(plot);
     return {
         timeUnit: "ms",
         durationMs: plot.duration * 1000,
         panels: [
-            { title: "RF (Hz)", series: [
-                { type: "line", name: "Re", color: COLORS.rfRe, data: seriesXY(tMs, plot.rfRe) },
-                { type: "line", name: "Im", color: COLORS.rfIm, data: seriesXY(tMs, plot.rfIm) }
-            ]},
-            { title: "GX (Hz/m)", series: [{ type: "line", name: "GX", color: COLORS.gx, data: seriesXY(tMs, plot.gx) }] },
-            { title: "GY (Hz/m)", series: [{ type: "line", name: "GY", color: COLORS.gy, data: seriesXY(tMs, plot.gy) }] },
-            { title: "GZ (Hz/m)", series: [{ type: "line", name: "GZ", color: COLORS.gz, data: seriesXY(tMs, plot.gz) }] },
-            { title: "ADC", series: [{ type: "line", name: "ADC", color: COLORS.adc, data: seriesXY(tMs, plot.adc) }] }
+            panel("RF (Hz)", "|RF|", COLORS.rf, tMs, rf.mag),
+            panel("RF phase (rad)", "RF phase", COLORS.rfPhase, tMs, rf.phase),
+            panel("GX (Hz/m)", "GX", COLORS.gx, tMs, plot.gx),
+            panel("GY (Hz/m)", "GY", COLORS.gy, tMs, plot.gy),
+            panel("GZ (Hz/m)", "GZ", COLORS.gz, tMs, plot.gz),
+            panel("ADC", "ADC", COLORS.adc, tMs, plot.adc)
         ]
     };
 }

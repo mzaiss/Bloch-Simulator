@@ -29,6 +29,8 @@ Load a Pulseq `.seq` file (or pick an example). The sequence is shown as a Chart
 
 Defaults: B0 rotating frame, B1 view (not torque/B1eff), and a circular lab floor so the rotating frame does not show a spinning rectangle. Sequences with gradients switch to the **Plane** sample on Play if the current scene has no spatial extent (Equilibrium, etc.), so Gx/Gy are visible across the spin sheet.
 
+Plot rows follow the 3D view's colours: RF magnitude in **yellow** (like the B1 arrow), RF phase **orange**, GX **blue**, GY **green**, GZ **violet**, ADC **red**. GX and GY are played as independent channels, so oblique gradients (both on at once, as in the FLASH prewinder or the EPI blips) dephase along a diagonal. GZ is plotted but does not act on the sample, which lies in the xy plane.
+
 Playback **integrates** the waveforms over each animation frame rather than sampling them once, and splits the frame into several Bloch steps while RF is on. Flip angles and gradient moments therefore come out the same at any frame rate and at any speed from 0.05× to 5×. Slow playback is still useful for watching: a strong gradient can wind more than half a turn per frame at 5×, which reads as flicker even though the final state is right.
 
 Example sequences (from [MRTwin_pulseq BlochSimWeb](https://github.com/mzaiss/MRTwin_pulseq/tree/mr0-core/BlochSimWeb)):
