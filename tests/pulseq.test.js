@@ -209,6 +209,40 @@ function replay(wf, fps, stretch, gradScale) {
         pointSampled(baseStretch / 5).toFixed(0), "deg vs nominal", nominal);
 })();
 
+(function testSimultaneousXYGradients() {
+    // Gx and Gy are integrated and applied as independent channels, so an oblique
+    // gradient works; the simulator sums them as (Gx*x + Gy*y)/gradScale.
+    var gradScale = 11;
+    ["web3_FLASH_16.seq", "web5_EPI_16.seq"].forEach(function (file) {
+        var seq = Pulseq.parse(readSeq(file));
+        var wf = seq.rasterize(20e-6);
+        var overlapping = 0;
+        for (var i = 0; i < wf.n; i++) {
+            if (Math.abs(wf.gx[i]) > 1 && Math.abs(wf.gy[i]) > 1) overlapping++;
+        }
+        assert.ok(overlapping > 20, file + " should drive Gx and Gy together, samples: " + overlapping);
+
+        // A playback frame covering that overlap must carry both channels at once.
+        var stretch = 8 / wf.duration;
+        var dtWall = 1 / 60;
+        var both = null;
+        for (var t = 0; t < wf.duration && !both; t += dtWall / stretch) {
+            var m = Pulseq.meanOver(wf, t, Math.min(t + dtWall / stretch, wf.duration));
+            if (Math.abs(m.gx) > 1 && Math.abs(m.gy) > 1) both = m;
+        }
+        assert.ok(both, file + ": a frame must integrate Gx and Gy simultaneously");
+
+        // The oblique field tilts the phase ramp away from both axes.
+        var gx = Pulseq.gradToEdu(both.gx, stretch, gradScale);
+        var gy = Pulseq.gradToEdu(both.gy, stretch, gradScale);
+        var angle = Math.atan2(gy, gx) * 180 / Math.PI;
+        assert.ok(Math.abs(gx) > 0 && Math.abs(gy) > 0, file + ": both channels must be non-zero");
+        console.log("ok simultaneous Gx/Gy in " + file + ": " + overlapping +
+            " samples, frame Gx " + gx.toFixed(1) + " Gy " + gy.toFixed(1) +
+            " (dephasing " + angle.toFixed(0) + " deg off the x axis)");
+    });
+})();
+
 (function testShapeDecompressBlockPulse() {
     var samples = Pulseq.decompressShape([1, 0, 0, 997, -1, 0, 0, 17], 1020);
     assert.strictEqual(samples.length, 1020);
