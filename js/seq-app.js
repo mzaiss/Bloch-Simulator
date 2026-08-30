@@ -20,10 +20,13 @@ const EXAMPLES = [
 const TARGET_PLAY_S = 8;
 const MIN_STRETCH = 10;
 const MAX_STRETCH = 400;
-// Pulseq Hz/m → educational Gx/Gy. 4000 Hz/m (typical EPI/FLASH readout) → Gx≈8,
-// similar to the built-in Strong/Weak gradient scenes. Do not divide by time-stretch:
-// stretch already lengthens how long G is applied; dividing hid gradients on the Plane.
-const GRAD_HZM_TO_EDU = 8 / 4000;
+/** Largest Bloch rotation per sub-step while RF is on, where B1 and B0 do not commute. */
+const MAX_SUBSTEP_ANGLE = 0.05;
+/** Isochromat updates per frame the sub-stepping may spend (Plane is 441 spins). */
+const SUBSTEP_BUDGET = 8000;
+const SUBSTEP_LIMIT = 128;
+/** RF counts as on above this fraction of the sequence peak (sinc zero crossings). */
+const RF_ON_FRACTION = 1e-3;
 
 var plotHost = {};
 var loaded = {
@@ -38,8 +41,33 @@ var player = {
     stretch: 80,
     speed: 1,
     rfWasOn: false,
-    guiAge: 0
+    guiAge: 0,
+    rfOnThreshold: 0,
+    maxRadius: 0
 };
+
+function gradScaleOf() {
+    var bridge = window.BlochSimBridge;
+    return (bridge && bridge.gradScale) || 11;
+}
+
+function peakRf(wf) {
+    var peak = 0;
+    for (var i = 0; i < wf.n; i++) if (wf.rfAmp[i] > peak) peak = wf.rfAmp[i];
+    return peak;
+}
+
+function maxIsocRadius(state) {
+    var arr = (state && state.IsocArr) || [];
+    var max = 0;
+    for (var i = 0; i < arr.length; i++) {
+        var p = arr[i].pos;
+        if (!p) continue;
+        var d = Math.sqrt(p.x * p.x + p.y * p.y);
+        if (d > max) max = d;
+    }
+    return max;
+}
 
 function waveformHasGradients(wf) {
     if (!wf) return false;
@@ -67,6 +95,10 @@ function formatSummary(sum) {
         (flips ? "  ·  flips " + flips : "");
 }
 
+function formatSpeed(speed) {
+    return (Math.round(speed * 100) / 100) + "×";
+}
+
 function autoStretch(duration) {
     if (!(duration > 0)) return 80;
     return Math.max(MIN_STRETCH, Math.min(MAX_STRETCH, TARGET_PLAY_S / duration));
@@ -76,7 +108,7 @@ async function loadSeqText(text, name) {
     stopPlayback(true);
     var seq = Pulseq.parse(text);
     var summary = seq.summary();
-    var waveforms = seq.rasterize(summary.duration > 0.4 ? 50e-6 : 20e-6);
+    var waveforms = seq.rasterize(summary.duration > 0.5 ? 20e-6 : 5e-6);
     loaded.name = name || summary.name;
     loaded.seq = seq;
     loaded.waveforms = waveforms;
@@ -132,54 +164,89 @@ function startPlayback() {
     player.t = 0;
     player.rfWasOn = false;
     player.guiAge = 0;
+    player.rfOnThreshold = peakRf(loaded.waveforms) * RF_ON_FRACTION;
+    player.maxRadius = maxIsocRadius(bridge && bridge.getState ? bridge.getState() : null);
     player.playing = true;
     $("pulseqPlay").textContent = "Stop";
     setStatus("Playing " + loaded.name + "  (" +
         (loaded.summary.duration * 1000).toFixed(1) + " ms seq → " +
-        (loaded.waveforms.duration * player.stretch / player.speed).toFixed(1) + " s view)");
+        (loaded.waveforms.duration * player.stretch / player.speed).toFixed(1) + " s view at " +
+        formatSpeed(player.speed) + ")");
 }
 
-/**
- * Called from the Bloch animate loop. Maps Pulseq waveforms onto educational
- * Bloch units so flip angles stay physically correct under time-stretch.
- */
-function applyTick(dt, state) {
-    if (!player.playing || !loaded.waveforms || !state) return;
-    var stretch = player.stretch / (player.speed || 1);
-    player.t += dt / stretch;
-    var s = Pulseq.sampleAt(loaded.waveforms, player.t);
-    setPlayhead(plotHost, player.t);
-
-    if (s.done) {
-        stopPlayback(false);
-        setStatus("Finished " + loaded.name);
+/** Drive the simulator fields from the waveform averaged over one (sub-)step. */
+function driveState(state, mean, stretch) {
+    var amp = Math.sqrt(mean.rfRe * mean.rfRe + mean.rfIm * mean.rfIm);
+    var rfOn = amp > player.rfOnThreshold;
+    if (rfOn) {
+        var phase = Math.atan2(mean.rfIm, mean.rfRe);
+        var bridge = window.BlochSimBridge;
+        if (!player.rfWasOn && bridge && bridge.markRfStart) bridge.markRfStart(phase);
+        else state.phi1 = phase;
+        state.B1 = Pulseq.rfToEdu(amp, stretch);
+    } else {
         state.B1 = 0;
-        state.Gx = 0;
-        state.Gy = 0;
-        state.tLeftRF = 0;
-        state.areaLeftRF = 0;
-        state.areaLeftGrad = 0;
-        return;
-    }
-
-    var rfOn = Math.abs(s.rfAmp) > 1e-6;
-    if (rfOn && !player.rfWasOn) {
-        state.tSinceRF = 0;
-        if (typeof window.BlochSimBridge === "object" && window.BlochSimBridge.markRfStart) {
-            window.BlochSimBridge.markRfStart(s.rfPhase);
-        } else {
-            state.phi1 = s.rfPhase;
-        }
     }
     player.rfWasOn = rfOn;
-
-    // gamma_edu * B1_edu * dt_wall = 2π * B1_Hz * dt_phys, dt_phys = dt_wall / stretch
-    state.B1 = rfOn ? (2 * Math.PI * s.rfAmp) / stretch : 0;
     state.tLeftRF = 0;
     state.areaLeftRF = 0;
     state.areaLeftGrad = 0;
-    state.Gx = s.gx * GRAD_HZM_TO_EDU;
-    state.Gy = s.gy * GRAD_HZM_TO_EDU;
+    var gradScale = gradScaleOf();
+    state.Gx = Pulseq.gradToEdu(mean.gx, stretch, gradScale);
+    state.Gy = Pulseq.gradToEdu(mean.gy, stretch, gradScale);
+}
+
+/**
+ * Sub-steps needed this frame. Gradients alone rotate purely about z, which commutes,
+ * so their averaged moment is already exact in a single step. RF does not commute with
+ * the off-resonance field, so it is split until each rotation is small.
+ */
+function subStepCount(mean, dt, state, stretch) {
+    var amp = Math.sqrt(mean.rfRe * mean.rfRe + mean.rfIm * mean.rfIm);
+    if (!(amp > player.rfOnThreshold)) return 1;
+    var gradScale = gradScaleOf();
+    var detuning = (Math.abs(Pulseq.gradToEdu(mean.gx, stretch, gradScale)) +
+        Math.abs(Pulseq.gradToEdu(mean.gy, stretch, gradScale))) * player.maxRadius / gradScale;
+    var angle = (state.Gamma || 1) * (Pulseq.rfToEdu(amp, stretch) + detuning) * dt;
+    var budget = Math.floor(SUBSTEP_BUDGET / Math.max(1, state.IsocArr.length));
+    var allowed = Math.max(1, Math.min(SUBSTEP_LIMIT, budget));
+    return Math.max(1, Math.min(Math.ceil(angle / MAX_SUBSTEP_ANGLE), allowed));
+}
+
+/**
+ * Replaces the plain BlochStep(dt) call in the animate loop while a sequence plays.
+ * The waveform is integrated over the frame instead of sampled once, so flip angles and
+ * gradient moments come out the same whatever the frame rate or playback speed.
+ */
+function stepSequence(dt, state, blochStep) {
+    if (!player.playing || !loaded.waveforms || !state) return blochStep(dt);
+
+    var wf = loaded.waveforms;
+    if (player.t >= wf.duration) {
+        finishPlayback();
+        return blochStep(dt);
+    }
+
+    var stretch = player.stretch / (player.speed || 1);
+    var t0 = player.t;
+    var t1 = Math.min(t0 + dt / stretch, wf.duration);
+    var driveDt = (t1 - t0) * stretch;
+
+    var frame = Pulseq.meanOver(wf, t0, t1);
+    var nSteps = subStepCount(frame, driveDt, state, stretch);
+    var seqStep = (t1 - t0) / nSteps;
+    var wallStep = driveDt / nSteps;
+    var B1vec;
+    for (var i = 0; i < nSteps; i++) {
+        var a = t0 + i * seqStep;
+        driveState(state, Pulseq.meanOver(wf, a, a + seqStep), stretch);
+        B1vec = blochStep(wallStep);
+    }
+
+    player.t = t1;
+    setPlayhead(plotHost, t1);
+    var fid = $("fidbox");
+    if (fid) fid.style.backgroundColor = frame.adc ? "rgba(255,80,40,0.18)" : "transparent";
 
     player.guiAge += dt;
     if (player.guiAge > 0.25) {
@@ -189,8 +256,17 @@ function applyTick(dt, state) {
         }
     }
 
-    var fid = $("fidbox");
-    if (fid) fid.style.backgroundColor = s.adc ? "rgba(255,80,40,0.18)" : "transparent";
+    if (t1 >= wf.duration) {
+        finishPlayback();
+        var rest = dt - driveDt;
+        if (rest > 0) B1vec = blochStep(rest);
+    }
+    return B1vec;
+}
+
+function finishPlayback() {
+    stopPlayback(false);
+    setStatus("Finished " + loaded.name);
 }
 
 function bindUi() {
@@ -228,7 +304,7 @@ function bindUi() {
 
     $("pulseqSpeed").addEventListener("input", function () {
         player.speed = parseFloat(this.value) || 1;
-        $("pulseqSpeedLabel").textContent = player.speed.toFixed(2).replace(/\.?0+$/, "") + "×";
+        $("pulseqSpeedLabel").textContent = formatSpeed(player.speed);
     });
 
     $("pulseqToggle").addEventListener("click", function () {
@@ -238,7 +314,7 @@ function bindUi() {
 
 function init() {
     bindUi();
-    window.pulseqApplyTick = applyTick;
+    window.pulseqStepSequence = stepSequence;
     window.PulseqApp = {
         loadSeqText: loadSeqText,
         loadFromPath: loadFromPath,
