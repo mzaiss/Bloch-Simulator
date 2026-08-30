@@ -1825,6 +1825,7 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 
 	window.BlochSimBridge = {
 	    getState: function () { return state; },
+	    gradScale: gradScale,
 	    markRfStart: function (seqPhase) {
 		state.tSinceRF = 0;
 		framePhase0 = framePhase;
@@ -2148,11 +2149,10 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 		dtMemory[ dtMemIndi ] = dt; //short term memory of dt 
 		dtMemIndi = (dtMemIndi + 1) % dtMemory.length;
 
-		if (typeof window.pulseqApplyTick === "function") {
-		    window.pulseqApplyTick(dt, state);
-		}
-		
-		let B1vec = BlochStep(dt);
+		// Pulseq playback integrates the waveform over the frame and may need
+		// several Bloch steps per frame, so it drives BlochStep itself.
+		let B1vec = (typeof window.pulseqStepSequence === "function") ?
+		    window.pulseqStepSequence(dt, state, BlochStep) : BlochStep(dt);
 		let B1mag = B1vec.length(); 
 		let allScale = state.allScale;
 
@@ -2622,7 +2622,7 @@ happens in spare time, bug reports and software suggestions may largely be ignor
       </label>
       <button id="pulseqPlay" type="button" disabled>Play</button>
       <label class="pulseq-speed">speed
-        <input id="pulseqSpeed" type="range" min="0.25" max="4" step="0.25" value="1">
+        <input id="pulseqSpeed" type="range" min="0.05" max="5" step="0.05" value="1">
         <span id="pulseqSpeedLabel">1×</span>
       </label>
     </div>

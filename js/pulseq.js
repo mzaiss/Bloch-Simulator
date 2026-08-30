@@ -18,6 +18,12 @@
     var GRAD_RASTER = 10e-6;
     var BLOCK_RASTER = 10e-6;
 
+    var INTEGRATED_CHANNELS = ["rfRe", "rfIm", "gx", "gy", "gz"];
+    /** Matches gradScale in index.html (isochromat detuning = G*pos/gradScale). */
+    var DEFAULT_GRAD_SCALE = 11;
+    /** Physical size of one scene unit; sets how strongly a gradient dephases the sample. */
+    var METRES_PER_SCENE_UNIT = 0.015;
+
     function parseVersionNumber(lines) {
         var major = 0, minor = 0, revision = 0;
         for (var i = 0; i < lines.length; i++) {
@@ -297,12 +303,23 @@
         return d;
     };
 
+    /**
+     * On-resonance flip angle. Pulseq keeps the magnitude shape non-negative and puts
+     * sign changes (a sinc's side lobes) in the phase shape, so the lobes have to be
+     * summed as vectors — summing magnitudes alone overstates the angle.
+     */
     Sequence.prototype.rfFlipDeg = function (rf) {
         if (!rf) return 0;
         var mag = shapeSamples(this.shapes, rf.mag_id);
-        var sum = 0;
-        for (var i = 0; i < mag.length; i++) sum += mag[i];
-        return rf.amp * sum * this.rasters.rf * 360;
+        var phs = shapeSamples(this.shapes, rf.phase_id);
+        var re = 0;
+        var im = 0;
+        for (var i = 0; i < mag.length; i++) {
+            var p = 2 * Math.PI * (i < phs.length ? phs[i] : 0);
+            re += mag[i] * Math.cos(p);
+            im += mag[i] * Math.sin(p);
+        }
+        return rf.amp * Math.sqrt(re * re + im * im) * this.rasters.rf * 360;
     };
 
     Sequence.prototype.summary = function () {
@@ -413,7 +430,7 @@
             }
         }
 
-        return {
+        return buildIntegrals({
             dt: dt,
             duration: duration,
             n: n,
@@ -426,8 +443,78 @@
             gy: gy,
             gz: gz,
             adc: adc
-        };
+        });
     };
+
+    /**
+     * Cumulative trapezoid integrals of every played channel, so the mean over an
+     * arbitrary interval costs O(1). Playback integrates rather than point-samples:
+     * a point sample of a 1 ms pulse or an oscillating EPI readout aliases badly once
+     * a frame covers more sequence time than the feature itself.
+     */
+    function buildIntegrals(wf) {
+        var cum = {};
+        for (var k = 0; k < INTEGRATED_CHANNELS.length; k++) {
+            var key = INTEGRATED_CHANNELS[k];
+            var y = wf[key];
+            var c = new Float64Array(wf.n);
+            var acc = 0;
+            for (var i = 1; i < wf.n; i++) {
+                acc += 0.5 * (y[i - 1] + y[i]) * wf.dt;
+                c[i] = acc;
+            }
+            cum[key] = c;
+        }
+        wf.cum = cum;
+        return wf;
+    }
+
+    function integralAt(wf, key, t) {
+        if (t <= 0) return 0;
+        var y = wf[key];
+        var c = wf.cum[key];
+        var tEnd = (wf.n - 1) * wf.dt;
+        if (t >= tEnd) return c[wf.n - 1];
+        var idx = t / wf.dt;
+        var i0 = Math.floor(idx);
+        var f = idx - i0;
+        var y0 = y[i0];
+        var yt = y0 + (y[i0 + 1] - y0) * f;
+        return c[i0] + 0.5 * (y0 + yt) * f * wf.dt;
+    }
+
+    /** Time-average of each channel over [t0,t1]; exact for the piecewise-linear raster. */
+    function meanOver(wf, t0, t1) {
+        var out = { rfRe: 0, rfIm: 0, gx: 0, gy: 0, gz: 0, adc: 0 };
+        var span = t1 - t0;
+        if (!wf || !wf.cum || !(span > 0)) return out;
+        for (var k = 0; k < INTEGRATED_CHANNELS.length; k++) {
+            var key = INTEGRATED_CHANNELS[k];
+            out[key] = (integralAt(wf, key, t1) - integralAt(wf, key, t0)) / span;
+        }
+        var mid = Math.round((t0 + t1) / 2 / wf.dt);
+        out.adc = wf.adc[Math.min(wf.n - 1, Math.max(0, mid))];
+        return out;
+    }
+
+    /**
+     * Pulseq RF amplitude [Hz] -> educational B1. Dividing by the playback stretch makes
+     * the flip angle depend only on the sequence, not on playback speed or frame rate.
+     */
+    function rfToEdu(ampHz, stretch) {
+        return (2 * Math.PI * ampHz) / stretch;
+    }
+
+    /**
+     * Pulseq gradient [Hz/m] -> educational Gx/Gy, which the simulator turns into a
+     * detuning of G*pos/gradScale. Also divided by the stretch, so a gradient lobe always
+     * winds the same phase across the sample. METRES_PER_SCENE_UNIT sets the sample size:
+     * at 15 mm/unit an EPI readout lobe winds about one turn across the Plane.
+     */
+    function gradToEdu(gHzPerM, stretch, gradScale) {
+        return (2 * Math.PI * (gradScale || DEFAULT_GRAD_SCALE) *
+            METRES_PER_SCENE_UNIT * gHzPerM) / stretch;
+    }
 
     function downsampleWaveforms(wf, maxPoints) {
         maxPoints = maxPoints || 6000;
@@ -455,29 +542,6 @@
         };
     }
 
-    function sampleAt(wf, time) {
-        if (!wf || wf.n < 2) {
-            return { rfAmp: 0, rfPhase: 0, gx: 0, gy: 0, gz: 0, adc: 0 };
-        }
-        if (time <= 0) time = 0;
-        if (time >= wf.duration) {
-            return { rfAmp: 0, rfPhase: 0, gx: 0, gy: 0, gz: 0, adc: 0, done: true };
-        }
-        var idx = time / wf.dt;
-        var i0 = Math.min(wf.n - 2, Math.max(0, Math.floor(idx)));
-        var f = idx - i0;
-        function lerp(arr) { return arr[i0] * (1 - f) + arr[i0 + 1] * f; }
-        return {
-            rfAmp: lerp(wf.rfAmp),
-            rfPhase: lerp(wf.rfPhase),
-            gx: lerp(wf.gx),
-            gy: lerp(wf.gy),
-            gz: lerp(wf.gz),
-            adc: wf.adc[i0],
-            done: false
-        };
-    }
-
     function parse(text) {
         return new Sequence(text);
     }
@@ -486,7 +550,9 @@
         parse: parse,
         Sequence: Sequence,
         downsampleWaveforms: downsampleWaveforms,
-        sampleAt: sampleAt,
+        meanOver: meanOver,
+        rfToEdu: rfToEdu,
+        gradToEdu: gradToEdu,
         decompressShape: decompressShape
     };
 });
