@@ -1076,6 +1076,7 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 		
 		state = { //dummy example values. More are added for some samples.
 		    B0: 0,
+		    Gamma: 1, // needed before first sampleChange: framePhase would go NaN.
 		    B1: 0,
 		    B1freq: 0, //angular frequency
 		    phi1: 0,  //RF phase in rotating frame.
@@ -2298,6 +2299,7 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 		if (! frameFixed) {
 		    if (state.FrameB0) {framePhase += state.B0 * state.Gamma * dt}
 		    else if (state.FrameB1) {framePhase += state.B1freq * dt};
+		    if (! isFinite(framePhase)) {framePhase = 0} // a NaN would blank the scene for good.
 		    scene.rotation.z = framePhase; // continuous, even if B0 or B1freq change.
 		}
 
