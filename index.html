@@ -1834,21 +1834,6 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 		state.B1freq = state.Gamma * state.B0;
 		lastB1freq = state.B1freq;
 	    },
-	    sampleHasSpatialExtent: function () {
-		if (!state.IsocArr) return false;
-		for (var i = 0; i < state.IsocArr.length; i++) {
-		    var p = state.IsocArr[i].pos;
-		    if (p && p.lengthSq() > 1e-8) return true;
-		}
-		return false;
-	    },
-	    ensureSpatialSample: function () {
-		if (window.BlochSimBridge.sampleHasSpatialExtent()) return;
-		state.Sample = "Plane";
-		trigSampleChange = true;
-		sampleChange();
-		$("#Presets").button("option", "label", "Plane");
-	    },
 	    prepareForSeq: function () {
 		paused = false;
 		$("#Pause").button("option", "label", "||");
@@ -2483,7 +2468,8 @@ happens in spare time, bug reports and software suggestions may largely be ignor
       box-shadow: 0 0 6px #ff4d6d;
       }
       .pulseq-speed { display: flex; align-items: center; gap: 4px; color: #9aa4bf; }
-      .pulseq-speed input { width: 72px; }
+      .pulseq-speed input { width: 144px; }
+      .pulseq-repeat { display: flex; align-items: center; gap: 4px; color: #9aa4bf; cursor: pointer; }
       
     </style>
     
@@ -2624,6 +2610,9 @@ happens in spare time, bug reports and software suggestions may largely be ignor
       <label class="pulseq-speed">speed
         <input id="pulseqSpeed" type="range" min="0.05" max="5" step="0.05" value="1">
         <span id="pulseqSpeedLabel">1×</span>
+      </label>
+      <label class="pulseq-repeat">
+        <input id="pulseqRepeat" type="checkbox"> repeat
       </label>
     </div>
     <div id="pulseqStatus">Load a .seq file or pick an example, then Play.</div>

@@ -33,7 +33,8 @@ var loaded = {
     name: "",
     seq: null,
     waveforms: null,
-    summary: null
+    summary: null,
+    hasGradients: false
 };
 var player = {
     playing: false,
@@ -67,14 +68,6 @@ function maxIsocRadius(state) {
         if (d > max) max = d;
     }
     return max;
-}
-
-function waveformHasGradients(wf) {
-    if (!wf) return false;
-    for (var i = 0; i < wf.n; i++) {
-        if (Math.abs(wf.gx[i]) > 1 || Math.abs(wf.gy[i]) > 1 || Math.abs(wf.gz[i]) > 1) return true;
-    }
-    return false;
 }
 
 function $(id) { return document.getElementById(id); }
@@ -113,6 +106,10 @@ async function loadSeqText(text, name) {
     loaded.seq = seq;
     loaded.waveforms = waveforms;
     loaded.summary = summary;
+    loaded.hasGradients = false;
+    for (var i = 0; i < waveforms.n && !loaded.hasGradients; i++) {
+        if (Math.abs(waveforms.gx[i]) > 1 || Math.abs(waveforms.gy[i]) > 1) loaded.hasGradients = true;
+    }
     player.stretch = autoStretch(waveforms.duration);
     setStatus(formatSummary(summary));
     $("pulseqPlay").disabled = false;
@@ -157,9 +154,6 @@ function stopPlayback(resetTime) {
 function startPlayback() {
     if (!loaded.waveforms) return;
     var bridge = window.BlochSimBridge;
-    if (waveformHasGradients(loaded.waveforms) && bridge && bridge.ensureSpatialSample) {
-        bridge.ensureSpatialSample();
-    }
     if (bridge && bridge.prepareForSeq) bridge.prepareForSeq();
     player.t = 0;
     player.rfWasOn = false;
@@ -168,10 +162,13 @@ function startPlayback() {
     player.maxRadius = maxIsocRadius(bridge && bridge.getState ? bridge.getState() : null);
     player.playing = true;
     $("pulseqPlay").textContent = "Stop";
+    // Gradients act through position, so they do nothing to a sample sitting at the origin.
+    var noSpatialSample = loaded.hasGradients && player.maxRadius < 1e-6;
     setStatus("Playing " + loaded.name + "  (" +
         (loaded.summary.duration * 1000).toFixed(1) + " ms seq → " +
         (loaded.waveforms.duration * player.stretch / player.speed).toFixed(1) + " s view at " +
-        formatSpeed(player.speed) + ")");
+        formatSpeed(player.speed) + ")" +
+        (noSpatialSample ? "  ·  pick Plane or a gradient scene to see Gx/Gy act" : ""));
 }
 
 /** Drive the simulator fields from the waveform averaged over one (sub-)step. */
@@ -266,6 +263,11 @@ function stepSequence(dt, state, blochStep) {
 
 function finishPlayback() {
     stopPlayback(false);
+    var repeat = $("pulseqRepeat");
+    if (repeat && repeat.checked) {
+        startPlayback();
+        return;
+    }
     setStatus("Finished " + loaded.name);
 }
 

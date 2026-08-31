@@ -27,7 +27,9 @@ Local: serve the folder over HTTP (needed for example `.seq` files and ChartGPU)
 
 Load a Pulseq `.seq` file (or pick an example). The sequence is shown as a ChartGPU `seq.plot` (same stacked RF / GX / GY / GZ / ADC view as [anyfield](https://github.com/mrx-org/anyfield/blob/main/pypulseq/seq_plot.js)). **Play** runs the waveforms on the Bloch simulator. Time is stretched so a short sequence is watchable; use the speed slider to go faster or slower.
 
-Defaults: B0 rotating frame, B1 view (not torque/B1eff), and a circular lab floor so the rotating frame does not show a spinning rectangle. Sequences with gradients switch to the **Plane** sample on Play if the current scene has no spatial extent (Equilibrium, etc.), so Gx/Gy are visible across the spin sheet.
+Defaults: B0 rotating frame, B1 view (not torque/B1eff), and a circular lab floor so the rotating frame does not show a spinning rectangle. Play never changes the scene, so a sequence can be watched in any of them. Gradients act through position, so choose a scene with spatial extent — **Plane**, **Weak/Strong gradient** or **Structure** — to see Gx/Gy dephase the sample; single-isochromat scenes such as Equilibrium show the RF only.
+
+**repeat** restarts the sequence from equilibrium each time it ends.
 
 Plot rows follow the 3D view's colours: RF magnitude in **yellow** (like the B1 arrow), RF phase **orange**, GX **blue**, GY **green**, GZ **violet**, ADC **red**. GX and GY are played as independent channels, so oblique gradients (both on at once, as in the FLASH prewinder or the EPI blips) dephase along a diagonal. GZ is plotted but does not act on the sample, which lies in the xy plane.
 
