@@ -27,7 +27,7 @@ function almost(a, b, tol, msg) {
     var wf = seq.rasterize(20e-6);
     assert.ok(wf.n > 100);
     var peak = 0;
-    for (var k = 0; k < wf.n; k++) if (wf.rfAmp[k] > peak) peak = wf.rfAmp[k];
+    for (var k = 0; k < wf.n; k++) peak = Math.max(peak, Math.hypot(wf.rfRe[k], wf.rfIm[k]));
     assert.ok(peak > 900, "last FID RF should reach ~1000 Hz, got " + peak);
     console.log("ok FID", sum);
 })();
@@ -192,7 +192,8 @@ function replay(wf, fps, stretch, gradScale) {
         var sum = 0;
         for (var t = 0; t < wf.duration; t += dtWall / stretch) {
             var i = Math.min(wf.n - 1, Math.round(t / wf.dt));
-            sum += Pulseq.rfToEdu(wf.rfAmp[i], stretch) * dtWall * 180 / Math.PI;
+            sum += Pulseq.rfToEdu(Math.hypot(wf.rfRe[i], wf.rfIm[i]), stretch) *
+                dtWall * 180 / Math.PI;
         }
         return sum;
     }
@@ -241,6 +242,71 @@ function replay(wf, fps, stretch, gradScale) {
             " samples, frame Gx " + gx.toFixed(1) + " Gy " + gy.toFixed(1) +
             " (dephasing " + angle.toFixed(0) + " deg off the x axis)");
     });
+})();
+
+(function testSuggestedRasterIsFineButBounded() {
+    var fid = Pulseq.parse(readSeq("web1_FID.seq"));
+    var dt = fid.suggestedRaster();
+    almost(dt, 0.5e-6, 1e-12, "raster should be half the 1 us RF raster");
+
+    var fine = fid.rasterize(dt);
+    assert.ok(fine.n > 100000 && fine.n <= 300001, "FID samples at fine raster: " + fine.n);
+
+    // 10x finer than the previous 5 us grid, so pulse edges land closer to the grid and
+    // the integrated flip lands closer to nominal.
+    var nominal = 30 + 60 + 90 + 120 + 150 + 180 + 210 + 240 + 270 + 300 + 330 + 360;
+    var stretch = 8 / fine.duration;
+    var coarseErr = Math.abs(replay(fid.rasterize(5e-6), 60, stretch, 11).wind - nominal);
+    var fineErr = Math.abs(replay(fine, 60, stretch, 11).wind - nominal);
+    assert.ok(fineErr < coarseErr, "fine raster error " + fineErr.toFixed(1) +
+        " should beat coarse " + coarseErr.toFixed(1));
+    assert.ok(fineErr < nominal * 0.005, "fine raster within 0.5%: " + fineErr.toFixed(1) + " deg");
+
+    // A long sequence must fall back to a coarser raster rather than eat memory.
+    var long = Pulseq.parse([
+        "[VERSION]", "major 1", "minor 2", "revision 0",
+        "[BLOCKS]", "1 1 0 0 0 0 0",
+        "[DELAYS]", "1 2000000"
+    ].join("\n"));
+    almost(long.summary().duration, 2, 1e-9, "synthetic 2 s sequence");
+    var longWf = long.rasterize(long.suggestedRaster());
+    assert.ok(longWf.n <= 300001, "long sequence capped at " + longWf.n + " samples");
+    console.log("ok raster: FID dt", (dt * 1e9).toFixed(0), "ns ->", fine.n,
+        "samples, flip error", fineErr.toFixed(1), "deg (was", coarseErr.toFixed(1) +
+        "); 2 s sequence capped at", longWf.n);
+})();
+
+(function testExtendedTrapezoidTimeShape() {
+    // From v1.4 a gradient may carry a time_id: the samples sit at the times in that
+    // shape rather than on the uniform gradient raster. Ramp 0->1000 Hz/m over 20 us,
+    // flat to 80 us, back to 0 at 100 us.
+    var seq = Pulseq.parse([
+        "[VERSION]", "major 1", "minor 4", "revision 0",
+        "[DEFINITIONS]",
+        "GradientRasterTime 1e-05",
+        "RadiofrequencyRasterTime 1e-06",
+        "BlockDurationRaster 1e-05",
+        "# id duration rf gx gy gz adc ext",
+        "[BLOCKS]", "1 10 0 1 0 0 0 0",
+        "# id amplitude shape_id time_id delay",
+        "[GRADIENTS]", "1 1000 1 2 0",
+        "[SHAPES]",
+        "shape_id 1", "num_samples 4", "0", "1", "0", "-1",
+        "shape_id 2", "num_samples 4", "0", "2", "6", "2"
+    ].join("\n"));
+
+    almost(seq.summary().duration, 100e-6, 1e-12, "block duration from the v1.4 field");
+    var wf = seq.rasterize(0.5e-6);
+    function gxAt(tUs) { return wf.gx[Math.round(tUs * 1e-6 / wf.dt)]; }
+    almost(gxAt(10), 500, 5, "half way up the 20 us ramp");
+    almost(gxAt(50), 1000, 1, "flat top");
+    // Without time-shape support the waveform would have stopped after 4 raster steps
+    // (40 us), so this sample is what proves the time shape is honoured.
+    almost(gxAt(90), 500, 5, "half way down the ramp at 90 us");
+    var moment = Pulseq.meanOver(wf, 0, wf.duration).gx * wf.duration;
+    almost(moment, 1000 * 80e-6, 1000 * 80e-6 * 0.01, "trapezoid moment");
+    console.log("ok time-shaped gradient: 100 us extended trapezoid, moment",
+        moment.toFixed(5), "Hz/m*s");
 })();
 
 (function testShapeDecompressBlockPulse() {

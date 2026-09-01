@@ -19,6 +19,8 @@
     var BLOCK_RASTER = 10e-6;
 
     var INTEGRATED_CHANNELS = ["rfRe", "rfIm", "gx", "gy", "gz"];
+    /** Upper bound on rasterized samples, so a long sequence stays within a few tens of MB. */
+    var MAX_RASTER_SAMPLES = 300000;
     /** Matches gradScale in index.html (isochromat detuning = G*pos/gradScale). */
     var DEFAULT_GRAD_SCALE = 11;
     /** Physical size of one scene unit; sets how strongly a gradient dephases the sample. */
@@ -209,6 +211,48 @@
         return samples[i0] * (1 - f) + samples[i0 + 1] * f;
     }
 
+    /**
+     * Sample times of a Pulseq time shape, in seconds. From v1.4 an RF or gradient event
+     * may carry a time_id, whose shape holds the sample times in raster units instead of
+     * the samples sitting on a uniform raster (this is how extended trapezoids and other
+     * non-uniform gradient shapes are stored).
+     */
+    function shapeTimes(shapes, id, raster) {
+        if (!id) return null;
+        var s = shapeSamples(shapes, id);
+        if (!s.length) return null;
+        var out = new Array(s.length);
+        for (var i = 0; i < s.length; i++) out[i] = s[i] * raster;
+        return out;
+    }
+
+    /** Trapezoid integration weight of sample i within a non-uniform time shape. */
+    function sampleWidth(times, i) {
+        var n = times.length;
+        if (n < 2) return 0;
+        var prev = i > 0 ? times[i] - times[i - 1] : 0;
+        var next = i < n - 1 ? times[i + 1] - times[i] : 0;
+        return (prev + next) / 2;
+    }
+
+    /** Piecewise-linear value at time t for samples taken at explicit (monotonic) times. */
+    function interpAtTimes(times, values, t) {
+        var n = Math.min(times.length, values.length);
+        if (!n) return 0;
+        if (t < times[0] || t > times[n - 1]) return 0;
+        var lo = 0;
+        var hi = n - 1;
+        while (hi - lo > 1) {
+            var mid = (lo + hi) >> 1;
+            if (times[mid] <= t) lo = mid;
+            else hi = mid;
+        }
+        var span = times[hi] - times[lo];
+        if (span <= 0) return values[lo];
+        var f = (t - times[lo]) / span;
+        return values[lo] * (1 - f) + values[hi] * f;
+    }
+
     function Sequence(text) {
         var sections = parseSections(text);
         this.version = parseVersionNumber(sections.VERSION || []);
@@ -266,10 +310,10 @@
 
     Sequence.prototype._rfDurationUs = function (rf) {
         if (!rf) return 0;
+        var times = shapeTimes(this.shapes, rf.time_id, this.rasters.rf);
+        if (times) return (rf.delay || 0) + times[times.length - 1] * 1e6;
         var mag = shapeSamples(this.shapes, rf.mag_id);
-        var n = mag.length;
-        var rasterUs = this.rasters.rf * 1e6;
-        return (rf.delay || 0) + n * rasterUs;
+        return (rf.delay || 0) + mag.length * this.rasters.rf * 1e6;
     };
 
     Sequence.prototype._gradDurationUs = function (id) {
@@ -280,10 +324,24 @@
         }
         if (this.gradients[id]) {
             var g = this.gradients[id];
+            var times = shapeTimes(this.shapes, g.time_id, this.rasters.grad);
+            if (times) return (g.delay || 0) + times[times.length - 1] * 1e6;
             var samples = shapeSamples(this.shapes, g.shape_id);
             return (g.delay || 0) + samples.length * this.rasters.grad * 1e6;
         }
         return 0;
+    };
+
+    /**
+     * Raster for playback and plotting: half the finest raster the file declares, so
+     * gradient corners and RF samples land on the grid, capped so a long sequence cannot
+     * blow up memory.
+     */
+    Sequence.prototype.suggestedRaster = function () {
+        var finest = Math.min(this.rasters.rf, this.rasters.grad) / 2;
+        var totalUs = 0;
+        for (var i = 0; i < this.blocks.length; i++) totalUs += this.blockDurationUs(this.blocks[i]);
+        return Math.max(finest, totalUs * 1e-6 / MAX_RASTER_SAMPLES);
     };
 
     Sequence.prototype._adcDurationUs = function (adc) {
@@ -312,14 +370,16 @@
         if (!rf) return 0;
         var mag = shapeSamples(this.shapes, rf.mag_id);
         var phs = shapeSamples(this.shapes, rf.phase_id);
+        var times = shapeTimes(this.shapes, rf.time_id, this.rasters.rf);
         var re = 0;
         var im = 0;
         for (var i = 0; i < mag.length; i++) {
             var p = 2 * Math.PI * (i < phs.length ? phs[i] : 0);
-            re += mag[i] * Math.cos(p);
-            im += mag[i] * Math.sin(p);
+            var width = times ? sampleWidth(times, i) : this.rasters.rf;
+            re += mag[i] * Math.cos(p) * width;
+            im += mag[i] * Math.sin(p) * width;
         }
-        return rf.amp * Math.sqrt(re * re + im * im) * this.rasters.rf * 360;
+        return rf.amp * Math.sqrt(re * re + im * im) * 360;
     };
 
     Sequence.prototype.summary = function () {
@@ -356,6 +416,8 @@
             var samples = shapeSamples(this.shapes, g.shape_id);
             var local = tRel - (g.delay || 0) * 1e-6;
             if (local < 0) return 0;
+            var times = shapeTimes(this.shapes, g.time_id, this.rasters.grad);
+            if (times) return g.amp * interpAtTimes(times, samples, local);
             var idx = local / this.rasters.grad;
             if (idx >= samples.length) return 0;
             return g.amp * interpShape(samples, idx);
@@ -364,15 +426,24 @@
     };
 
     Sequence.prototype._evalRf = function (rf, tRel) {
-        if (!rf) return { re: 0, im: 0, amp: 0, phase: 0 };
+        var off = { re: 0, im: 0, amp: 0, phase: 0 };
+        if (!rf) return off;
         var local = tRel - (rf.delay || 0) * 1e-6;
-        if (local < 0) return { re: 0, im: 0, amp: 0, phase: 0 };
+        if (local < 0) return off;
         var mag = shapeSamples(this.shapes, rf.mag_id);
         var phs = shapeSamples(this.shapes, rf.phase_id);
-        var idx = local / this.rasters.rf;
-        if (idx >= mag.length) return { re: 0, im: 0, amp: 0, phase: 0 };
-        var m = interpShape(mag, idx);
-        var p = phs.length ? interpShape(phs, idx) : 0;
+        var times = shapeTimes(this.shapes, rf.time_id, this.rasters.rf);
+        var m, p;
+        if (times) {
+            if (local > times[times.length - 1]) return off;
+            m = interpAtTimes(times, mag, local);
+            p = phs.length ? interpAtTimes(times, phs, local) : 0;
+        } else {
+            var idx = local / this.rasters.rf;
+            if (idx >= mag.length) return off;
+            m = interpShape(mag, idx);
+            p = phs.length ? interpShape(phs, idx) : 0;
+        }
         var phase = (rf.phase || 0) + 2 * Math.PI * p + 2 * Math.PI * (rf.freq || 0) * local;
         var a = rf.amp * m;
         return { re: a * Math.cos(phase), im: a * Math.sin(phase), amp: a, phase: phase };
@@ -383,19 +454,19 @@
      * Returns waveforms used both for seq.plot and Bloch playback.
      */
     Sequence.prototype.rasterize = function (dt) {
-        dt = dt || 20e-6;
+        dt = dt || this.suggestedRaster();
         var duration = 0;
         var blockStarts = [];
+        var blockEnds = [];
         for (var i = 0; i < this.blocks.length; i++) {
             blockStarts.push(duration);
             duration += this.blockDurationUs(this.blocks[i]) * 1e-6;
+            blockEnds.push(duration);
         }
         var n = Math.max(2, Math.ceil(duration / dt) + 1);
         var t = new Float64Array(n);
         var rfRe = new Float64Array(n);
         var rfIm = new Float64Array(n);
-        var rfAmp = new Float64Array(n);
-        var rfPhase = new Float64Array(n);
         var gx = new Float64Array(n);
         var gy = new Float64Array(n);
         var gz = new Float64Array(n);
@@ -406,18 +477,13 @@
             var tk = k * dt;
             t[k] = tk;
             if (tk > duration) continue;
-            while (bIdx < this.blocks.length - 1 &&
-                tk >= blockStarts[bIdx] + this.blockDurationUs(this.blocks[bIdx]) * 1e-6) {
-                bIdx++;
-            }
+            while (bIdx < this.blocks.length - 1 && tk >= blockEnds[bIdx]) bIdx++;
             var block = this.blocks[bIdx];
             var tRel = tk - blockStarts[bIdx];
             if (block.rf) {
                 var rf = this._evalRf(this.rf[block.rf], tRel);
                 rfRe[k] = rf.re;
                 rfIm[k] = rf.im;
-                rfAmp[k] = rf.amp;
-                rfPhase[k] = rf.phase;
             }
             gx[k] = this._evalGrad(block.gx, tRel);
             gy[k] = this._evalGrad(block.gy, tRel);
@@ -437,8 +503,6 @@
             t: t,
             rfRe: rfRe,
             rfIm: rfIm,
-            rfAmp: rfAmp,
-            rfPhase: rfPhase,
             gx: gx,
             gy: gy,
             gz: gz,
@@ -533,8 +597,6 @@
             t: pick(wf.t),
             rfRe: pick(wf.rfRe),
             rfIm: pick(wf.rfIm),
-            rfAmp: pick(wf.rfAmp),
-            rfPhase: pick(wf.rfPhase),
             gx: pick(wf.gx),
             gy: pick(wf.gy),
             gz: pick(wf.gz),
