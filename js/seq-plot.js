@@ -8,6 +8,12 @@
 export const CHARTGPU_MODULE_URL = "https://esm.sh/chartgpu@0.3.2?target=es2022";
 export const LAB_SHELL_BG = "#0f1424";
 
+/**
+ * Points per row handed to the chart. Decimation, not the underlying raster, is what
+ * limits how narrow a feature can still be seen, so this is well above the pixel width.
+ */
+const PLOT_MAX_POINTS = 20000;
+
 const COLORS = {
     rf: "#ffe000", // matches the yellow B1 arrow in the 3D view
     rfPhase: "#ff7a18",
@@ -56,7 +62,7 @@ function panel(title, name, color, x, y) {
 }
 
 export function buildPlotPanels(wf) {
-    var plot = downsampleForPlot(wf, 5000);
+    var plot = downsampleForPlot(wf, PLOT_MAX_POINTS);
     var tMs = msAxis(plot);
     var rf = rfMagnitudeAndPhase(plot);
     return {

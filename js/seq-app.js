@@ -14,7 +14,8 @@ const EXAMPLES = [
     { name: "Spin echo (sinc)", path: "seq/web2_SpinEcho_sinc.seq" },
     { name: "FLASH 16", path: "seq/web3_FLASH_16.seq" },
     { name: "RARE 16", path: "seq/web4_RARE_16.seq" },
-    { name: "EPI 16", path: "seq/web5_EPI_16.seq" }
+    { name: "EPI 16", path: "seq/web5_EPI_16.seq" },
+    { name: "Spiral TSE", path: "seq/spiral_tse_ss.seq" }
 ];
 
 const TARGET_PLAY_S = 8;
@@ -27,6 +28,10 @@ const SUBSTEP_BUDGET = 8000;
 const SUBSTEP_LIMIT = 128;
 /** RF counts as on above this fraction of the sequence peak (sinc zero crossings). */
 const RF_ON_FRACTION = 1e-3;
+/** Speed slider: logarithmic, so the slow end where gradients are readable is usable. */
+const SPEED_MIN = 0.002;
+const SPEED_MAX = 5;
+const SPEED_SLIDER_STEPS = 1000;
 
 var plotHost = {};
 var loaded = {
@@ -34,7 +39,8 @@ var loaded = {
     seq: null,
     waveforms: null,
     summary: null,
-    hasGradients: false
+    hasGradients: false,
+    gradFactor: 1
 };
 var player = {
     playing: false,
@@ -54,7 +60,10 @@ function gradScaleOf() {
 
 function peakRf(wf) {
     var peak = 0;
-    for (var i = 0; i < wf.n; i++) if (wf.rfAmp[i] > peak) peak = wf.rfAmp[i];
+    for (var i = 0; i < wf.n; i++) {
+        var amp = Math.sqrt(wf.rfRe[i] * wf.rfRe[i] + wf.rfIm[i] * wf.rfIm[i]);
+        if (amp > peak) peak = amp;
+    }
     return peak;
 }
 
@@ -82,14 +91,28 @@ function setStatus(text, isError) {
 function formatSummary(sum) {
     var flips = sum.flips.slice(0, 8).map(function (f) { return f + "°"; }).join(", ");
     if (sum.flips.length > 8) flips += ", …";
+    var scaled = loaded.gradFactor < 1
+        ? "  ·  gradients ×" + loaded.gradFactor.toPrecision(2) + " to keep dephasing readable"
+        : "";
     return sum.name + "  v" + sum.version +
         "  ·  " + sum.nBlocks + " blocks  ·  " + sum.nRf + " RF  ·  " + sum.nAdc + " ADC  ·  " +
         (sum.duration * 1000).toFixed(1) + " ms" +
-        (flips ? "  ·  flips " + flips : "");
+        (flips ? "  ·  flips " + flips : "") + scaled;
+}
+
+function sliderToSpeed(pos) {
+    return SPEED_MIN * Math.pow(SPEED_MAX / SPEED_MIN, pos / SPEED_SLIDER_STEPS);
+}
+
+function speedToSlider(speed) {
+    return Math.round(SPEED_SLIDER_STEPS *
+        Math.log(speed / SPEED_MIN) / Math.log(SPEED_MAX / SPEED_MIN));
 }
 
 function formatSpeed(speed) {
-    return (Math.round(speed * 100) / 100) + "×";
+    if (speed >= 1) return (Math.round(speed * 10) / 10) + "×";
+    if (speed >= 0.1) return speed.toFixed(2) + "×";
+    return speed.toFixed(3) + "×";
 }
 
 function autoStretch(duration) {
@@ -101,7 +124,7 @@ async function loadSeqText(text, name) {
     stopPlayback(true);
     var seq = Pulseq.parse(text);
     var summary = seq.summary();
-    var waveforms = seq.rasterize(summary.duration > 0.5 ? 20e-6 : 5e-6);
+    var waveforms = seq.rasterize(seq.suggestedRaster());
     loaded.name = name || summary.name;
     loaded.seq = seq;
     loaded.waveforms = waveforms;
@@ -110,6 +133,7 @@ async function loadSeqText(text, name) {
     for (var i = 0; i < waveforms.n && !loaded.hasGradients; i++) {
         if (Math.abs(waveforms.gx[i]) > 1 || Math.abs(waveforms.gy[i]) > 1) loaded.hasGradients = true;
     }
+    loaded.gradFactor = Pulseq.gradientDisplayFactor(waveforms);
     player.stretch = autoStretch(waveforms.duration);
     setStatus(formatSummary(summary));
     $("pulseqPlay").disabled = false;
@@ -189,8 +213,8 @@ function driveState(state, mean, stretch) {
     state.areaLeftRF = 0;
     state.areaLeftGrad = 0;
     var gradScale = gradScaleOf();
-    state.Gx = Pulseq.gradToEdu(mean.gx, stretch, gradScale);
-    state.Gy = Pulseq.gradToEdu(mean.gy, stretch, gradScale);
+    state.Gx = Pulseq.gradToEdu(mean.gx, stretch, gradScale) * loaded.gradFactor;
+    state.Gy = Pulseq.gradToEdu(mean.gy, stretch, gradScale) * loaded.gradFactor;
 }
 
 /**
@@ -304,8 +328,13 @@ function bindUi() {
         else startPlayback();
     });
 
-    $("pulseqSpeed").addEventListener("input", function () {
-        player.speed = parseFloat(this.value) || 1;
+    var speedSlider = $("pulseqSpeed");
+    speedSlider.min = 0;
+    speedSlider.max = SPEED_SLIDER_STEPS;
+    speedSlider.step = 1;
+    speedSlider.value = speedToSlider(player.speed);
+    speedSlider.addEventListener("input", function () {
+        player.speed = sliderToSpeed(parseFloat(this.value));
         $("pulseqSpeedLabel").textContent = formatSpeed(player.speed);
     });
 
