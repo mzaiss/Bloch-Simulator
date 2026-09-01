@@ -376,6 +376,64 @@ function replay(wf, fps, stretch, gradScale) {
         worst.toFixed(3), "of 2");
 })();
 
+(function testUnderSampledGradientDetectionAndSmoothing() {
+    // The spiral file's gradients turn over every few raster steps, so its k-space
+    // trajectory zig-zags instead of tracing a path. Detect it, and smooth it in a way
+    // that keeps the trajectory the spins follow.
+    var seq = Pulseq.parse(readSeq("spiral_tse_ss.seq"));
+    var wf = seq.rasterize(seq.suggestedRaster());
+    var sampling = Pulseq.gradientSampling(wf, seq.rasters.grad);
+    assert.ok(sampling.undersampled, "spiral should be flagged, rasters=" + sampling.rasters);
+    assert.ok(sampling.rasters < 5, "oscillates every " + sampling.rasters.toFixed(2) + " rasters");
+
+    var before = Pulseq.peakGradientTurns(wf);
+    var peakBefore = 0;
+    for (var i = 0; i < wf.n; i++) peakBefore = Math.max(peakBefore, Math.abs(wf.gx[i]));
+
+    Pulseq.smoothGradients(wf, sampling.period * Pulseq.UNDERSAMPLED_SMOOTH_WINDOWS,
+        Pulseq.UNDERSAMPLED_SMOOTH_PASSES);
+
+    var after = Pulseq.peakGradientTurns(wf);
+    var peakAfter = 0;
+    for (var j = 0; j < wf.n; j++) peakAfter = Math.max(peakAfter, Math.abs(wf.gx[j]));
+
+    // Averaging is a convolution, so the k-space excursion survives...
+    almost(after, before, before * 0.02, "smoothing must preserve k-space");
+    // ...while the unrepresentable swing that threw the spins about does not.
+    assert.ok(peakAfter < peakBefore * 0.5,
+        "peak |Gx| " + peakBefore.toExponential(2) + " -> " + peakAfter.toExponential(2));
+    console.log("ok under-sampled gradients: every " + sampling.rasters.toFixed(2) +
+        " raster steps; peak |Gx| " + peakBefore.toExponential(2) + " -> " +
+        peakAfter.toExponential(2) + ", k-space " + before.toFixed(1) + " -> " + after.toFixed(1) +
+        " turns");
+
+    // Properly sampled sequences must not be touched.
+    ["web5_EPI_16.seq", "web3_FLASH_16.seq", "web4_RARE_16.seq"].forEach(function (file) {
+        var s = Pulseq.parse(readSeq(file));
+        var w = s.rasterize(s.suggestedRaster());
+        var samp = Pulseq.gradientSampling(w, s.rasters.grad);
+        assert.ok(!samp.undersampled, file + " should not be flagged, rasters=" + samp.rasters);
+    });
+})();
+
+(function testSpinEchoCpmgAndNonCpmg() {
+    var cpmg = Pulseq.parse(readSeq("web2_SpinEcho_me.seq"));
+    var plain = Pulseq.parse(readSeq("web2_SpinEcho_nonCPMG.seq"));
+
+    // Same timing and same flip angles; only the refocusing axis differs.
+    almost(plain.summary().duration, cpmg.summary().duration, 1e-12, "same duration");
+    assert.deepStrictEqual(plain.summary().flips, cpmg.summary().flips, "same flip angles");
+
+    var cpmgPhases = Object.keys(cpmg.rf).map(function (k) { return cpmg.rf[k].phase; });
+    var plainPhases = Object.keys(plain.rf).map(function (k) { return plain.rf[k].phase; });
+    almost(cpmgPhases[1], Math.PI / 2, 1e-3, "CPMG refocuses 90 deg from the excitation");
+    plainPhases.forEach(function (p, i) {
+        assert.strictEqual(p, 0, "non-CPMG RF " + (i + 1) + " phase must be 0");
+    });
+    console.log("ok spin echo variants: CPMG phases", JSON.stringify(cpmgPhases),
+        "vs non-CPMG", JSON.stringify(plainPhases));
+})();
+
 (function testShapeDecompressBlockPulse() {
     var samples = Pulseq.decompressShape([1, 0, 0, 997, -1, 0, 0, 17], 1020);
     assert.strictEqual(samples.length, 1020);

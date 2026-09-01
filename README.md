@@ -35,6 +35,8 @@ Plot rows follow the 3D view's colours: RF magnitude in **yellow** (like the B1 
 
 Playback **integrates** the waveforms over each animation frame rather than sampling them once, and splits the frame into several Bloch steps while RF is on. Flip angles and gradient moments therefore come out the same at any frame rate and at any playback speed. The speed slider is logarithmic and spans 0.002× to 5×; the slow end is what makes an individual gradient lobe readable, since a strong gradient can wind more than half a turn per frame at 5×.
 
+A gradient cannot physically turn over within a couple of raster steps, so a waveform that does was written below its own Nyquist rate: its k-space trajectory zig-zags instead of tracing a path, which reads as noise in the plot and throws the spins about. Such waveforms are detected, reported in the panel, and averaged over one oscillation — a convolution, so the k-space trajectory the spins follow is preserved while the unrepresentable swing is dropped. This is a mitigation, not a repair: if a frame still spans several gradient oscillations, only a low playback speed can resolve them, and the real fix is to write the sequence at a finer gradient raster.
+
 The sample is only about 20 isochromats across, so a sequence whose k-space excursion would wind far more than a couple of turns across it can only show aliasing. Such sequences get their gradients scaled down for display, and the panel says by how much; sequences that stay under the target (e.g. the EPI example) keep the plain physical scale so their dephasing stays comparable.
 
 Sequences are rasterized at half the finest raster the file declares — 0.5 µs for a typical 1 µs RF raster — so gradient corners and RF samples land on the grid. Very long sequences fall back to a coarser step to stay within a 300k-sample budget. Gradients defined with a Pulseq **time shape** (extended trapezoids and other non-uniform shapes, `time_id` from file version 1.4) are read at their own sample times rather than assumed to sit on the gradient raster.
@@ -42,7 +44,8 @@ Sequences are rasterized at half the finest raster the file declares — 0.5 µs
 Example sequences (from [MRTwin_pulseq BlochSimWeb](https://github.com/mzaiss/MRTwin_pulseq/tree/mr0-core/BlochSimWeb)):
 
 - `seq/web1_FID.seq` — block-pulse FID, flip angles 30°…360°
-- `seq/web2_SpinEcho_me.seq` — 90° then a train of 180°s
+- `seq/web2_SpinEcho_me.seq` — 90° then a train of 180°s, refocusing 90° from the excitation (CPMG)
+- `seq/web2_SpinEcho_nonCPMG.seq` — the same timing with all RF phases 0, so refocusing is along the excitation axis
 - `seq/web2_SpinEcho_sinc.seq` — sinc-pulse spin echo
 - `seq/web3_FLASH_16.seq` — 16-line FLASH
 - `seq/web4_RARE_16.seq` — 16-echo RARE
