@@ -31,7 +31,7 @@ Defaults: B0 rotating frame, B1 view (not torque/B1eff), and a circular lab floo
 
 **repeat** restarts the sequence from equilibrium each time it ends.
 
-Plot rows follow the 3D view's colours: RF magnitude in **yellow** (like the B1 arrow), RF phase **orange**, GX **blue**, GY **green**, GZ **violet**, ADC **red**. GX and GY are played as independent channels, so oblique gradients (both on at once, as in the FLASH prewinder or the EPI blips) dephase along a diagonal. GZ is plotted but does not act on the sample, which lies in the xy plane.
+Plot rows follow the 3D view's colours: RF magnitude in **yellow** (like the B1 arrow), RF phase **orange**, GX **blue**, GY **green**, GZ **violet**, ADC **red**. The whole sequence is shown at once — there is no wheel zoom and no time slider — and each row is drawn as a min/max envelope, so a fast waveform such as a spiral readout shows its true bounds instead of an aliased line. GX and GY are played as independent channels, so oblique gradients (both on at once, as in the FLASH prewinder or the EPI blips) dephase along a diagonal. GZ is plotted but does not act on the sample, which lies in the xy plane.
 
 Playback **integrates** the waveforms over each animation frame rather than sampling them once, and splits the frame into several Bloch steps while RF is on. Flip angles and gradient moments therefore come out the same at any frame rate and at any playback speed. The speed slider is logarithmic and spans 0.002× to 5×; the slow end is what makes an individual gradient lobe readable, since a strong gradient can wind more than half a turn per frame at 5×.
 

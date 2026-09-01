@@ -337,6 +337,45 @@ function replay(wf, fps, stretch, gradScale) {
     });
 })();
 
+(function testEnvelopeDecimationKeepsFastOscillations() {
+    // A waveform oscillating every few samples is what made the spiral readout look like
+    // noise: plain decimation lands on arbitrary phases, the envelope keeps the bounds.
+    var n = 200000;
+    var y = new Float64Array(n);
+    for (var i = 0; i < n; i++) y[i] = Math.sin(i * Math.PI / 2); // period of 4 samples
+
+    var maxPoints = 20000;
+    var env = Pulseq.envelopeSeries(y, n, 0.001, maxPoints);
+    assert.ok(env.y.length <= maxPoints, "output length " + env.y.length);
+
+    var envMin = Infinity, envMax = -Infinity;
+    for (var k = 0; k < env.y.length; k++) {
+        envMin = Math.min(envMin, env.y[k]);
+        envMax = Math.max(envMax, env.y[k]);
+    }
+    almost(envMin, -1, 0.01, "envelope keeps the trough");
+    almost(envMax, 1, 0.01, "envelope keeps the peak");
+
+    // Every bin must span nearly the full oscillation, not just wherever samples landed.
+    var perBinSpans = [];
+    for (var b = 0; b + 1 < env.y.length; b += 2) {
+        perBinSpans.push(Math.abs(env.y[b + 1] - env.y[b]));
+    }
+    var worst = Math.min.apply(null, perBinSpans);
+    assert.ok(worst > 1.5, "every bin should span the oscillation, worst " + worst.toFixed(3));
+
+    for (var j = 1; j < env.x.length; j++) {
+        assert.ok(env.x[j] >= env.x[j - 1], "x must not go backwards at " + j);
+    }
+
+    // Short inputs pass through untouched.
+    var small = Pulseq.envelopeSeries(new Float64Array([0, 1, 2]), 3, 2, maxPoints);
+    assert.deepStrictEqual(Array.from(small.x), [0, 2, 4], "x from index * dtX");
+    assert.deepStrictEqual(Array.from(small.y), [0, 1, 2], "y passed through");
+    console.log("ok envelope decimation:", env.y.length, "points, worst bin span",
+        worst.toFixed(3), "of 2");
+})();
+
 (function testShapeDecompressBlockPulse() {
     var samples = Pulseq.decompressShape([1, 0, 0, 997, -1, 0, 0, 17], 1020);
     assert.strictEqual(samples.length, 1020);
