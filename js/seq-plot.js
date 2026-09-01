@@ -9,10 +9,14 @@ export const CHARTGPU_MODULE_URL = "https://esm.sh/chartgpu@0.3.2?target=es2022"
 export const LAB_SHELL_BG = "#0f1424";
 
 /**
- * Points per row handed to the chart. Decimation, not the underlying raster, is what
- * limits how narrow a feature can still be seen, so this is well above the pixel width.
+ * Points per row handed to the chart, as min/max pairs (see envelopeSeries), so this is
+ * half as many time bins. Well above the pixel width of the panel.
  */
 const PLOT_MAX_POINTS = 20000;
+
+/** Plot area insets used for every row, so the playhead can line up with the x axis. */
+const GRID_LEFT = 54;
+const GRID_RIGHT = 8;
 
 const COLORS = {
     rf: "#ffe000", // matches the yellow B1 arrow in the 3D view
@@ -31,50 +35,38 @@ function seriesXY(x, y) {
     return { x: x, y: y };
 }
 
-function downsampleForPlot(wf, maxPoints) {
-    if (typeof Pulseq !== "undefined" && Pulseq.downsampleWaveforms) {
-        return Pulseq.downsampleWaveforms(wf, maxPoints);
-    }
-    return wf;
-}
-
-function msAxis(wf) {
-    var t = new Float64Array(wf.n);
-    for (var i = 0; i < wf.n; i++) t[i] = wf.t[i] * 1000;
-    return t;
-}
 
 /** Magnitude and wrapped phase of the complex RF, as pypulseq's seq.plot shows them. */
-function rfMagnitudeAndPhase(plot) {
-    var mag = new Float64Array(plot.n);
-    var phase = new Float64Array(plot.n);
-    for (var i = 0; i < plot.n; i++) {
-        var re = plot.rfRe[i];
-        var im = plot.rfIm[i];
+function rfMagnitudeAndPhase(wf) {
+    var mag = new Float64Array(wf.n);
+    var phase = new Float64Array(wf.n);
+    for (var i = 0; i < wf.n; i++) {
+        var re = wf.rfRe[i];
+        var im = wf.rfIm[i];
         mag[i] = Math.sqrt(re * re + im * im);
         phase[i] = mag[i] > 0 ? Math.atan2(im, re) : 0;
     }
     return { mag: mag, phase: phase };
 }
 
-function panel(title, name, color, x, y) {
-    return { title: title, series: [{ type: "line", name: name, color: color, data: seriesXY(x, y) }] };
+function panel(title, name, color, series) {
+    return { title: title, series: [{ type: "line", name: name, color: color, data: seriesXY(series.x, series.y) }] };
 }
 
 export function buildPlotPanels(wf) {
-    var plot = downsampleForPlot(wf, PLOT_MAX_POINTS);
-    var tMs = msAxis(plot);
-    var rf = rfMagnitudeAndPhase(plot);
+    var dtMs = wf.dt * 1000;
+    var rf = rfMagnitudeAndPhase(wf);
+    function row(y) { return Pulseq.envelopeSeries(y, wf.n, dtMs, PLOT_MAX_POINTS); }
     return {
         timeUnit: "ms",
-        durationMs: plot.duration * 1000,
+        durationMs: wf.duration * 1000,
         panels: [
-            panel("RF (Hz)", "|RF|", COLORS.rf, tMs, rf.mag),
-            panel("RF phase (rad)", "RF phase", COLORS.rfPhase, tMs, rf.phase),
-            panel("GX (Hz/m)", "GX", COLORS.gx, tMs, plot.gx),
-            panel("GY (Hz/m)", "GY", COLORS.gy, tMs, plot.gy),
-            panel("GZ (Hz/m)", "GZ", COLORS.gz, tMs, plot.gz),
-            panel("ADC", "ADC", COLORS.adc, tMs, plot.adc)
+            panel("RF (Hz)", "|RF|", COLORS.rf, row(rf.mag)),
+            panel("RF phase (rad)", "RF phase", COLORS.rfPhase, row(rf.phase)),
+            panel("GX (Hz/m)", "GX", COLORS.gx, row(wf.gx)),
+            panel("GY (Hz/m)", "GY", COLORS.gy, row(wf.gy)),
+            panel("GZ (Hz/m)", "GZ", COLORS.gz, row(wf.gz)),
+            panel("ADC", "ADC", COLORS.adc, row(wf.adc))
         ]
     };
 }
@@ -85,6 +77,15 @@ function disposeCharts(host) {
         try { host.charts[i].dispose(); } catch (e) { /* ignore */ }
     }
     host.charts = [];
+}
+
+/** Three significant digits, so gradient tick labels stay narrow enough to read. */
+function formatYTick(value) {
+    if (!isFinite(value)) return "";
+    if (value === 0) return "0";
+    var abs = Math.abs(value);
+    if (abs >= 1e4 || abs < 1e-3) return value.toExponential(1);
+    return String(Number(value.toPrecision(3)));
 }
 
 function seqChartGpuLabTheme(preset, fontSize) {
@@ -120,6 +121,7 @@ export async function renderSeqPlot(container, wf, host) {
         try {
             await renderChartGpu(stack, payload, host);
             host.mode = "chartgpu";
+            host.plotInset = { left: GRID_LEFT, right: GRID_RIGHT };
             return host;
         } catch (err) {
             console.warn("ChartGPU plot failed, using canvas fallback:", err);
@@ -129,6 +131,7 @@ export async function renderSeqPlot(container, wf, host) {
     }
     renderCanvasFallback(stack, payload, host);
     host.mode = "canvas";
+    host.plotInset = { left: 0, right: 0 };
     return host;
 }
 
@@ -171,16 +174,16 @@ async function renderChartGpu(stack, payload, host) {
             animation: false,
             legend: { show: false },
             grid: isBottom
-                ? { left: 54, right: 8, top: 4, bottom: 22 }
-                : { left: 54, right: 8, top: 4, bottom: 4 },
+                ? { left: GRID_LEFT, right: GRID_RIGHT, top: 4, bottom: 22 }
+                : { left: GRID_LEFT, right: GRID_RIGHT, top: 4, bottom: 4 },
             gridLines: { vertical: { count: 5 } },
             xAxis: isBottom
                 ? { name: "t (ms)" }
                 : { tickFormatter: function () { return null; }, tickLength: 0 },
-            yAxis: { name: panel.title },
-            dataZoom: isBottom
-                ? [{ type: "inside", minSpan: 0.008 }, { type: "slider", minSpan: 0.008, height: 8 }]
-                : [{ type: "inside", minSpan: 0.008 }],
+            yAxis: { name: panel.title, tickFormatter: formatYTick },
+            // No dataZoom: the whole sequence is shown at once, with no wheel zoom
+            // and no slider under the bottom row.
+            dataZoom: [],
             series: series
         }, ctx));
     }
@@ -266,9 +269,13 @@ function drawPanelCanvas(canvas, panel, durationMs) {
 
 export function setPlayhead(host, seqTimeS) {
     if (!host || !host.playhead || !host.durationMs) return;
-    var pct = Math.max(0, Math.min(1, (seqTimeS * 1000) / host.durationMs));
+    var frac = Math.max(0, Math.min(1, (seqTimeS * 1000) / host.durationMs));
+    var inset = host.plotInset || { left: 0, right: 0 };
+    // The chart reserves a left margin for the y-axis labels, so the time axis starts
+    // there rather than at the edge of the panel.
     host.playhead.style.display = "block";
-    host.playhead.style.left = (pct * 100) + "%";
+    host.playhead.style.left = "calc(" + inset.left + "px + " + frac +
+        " * (100% - " + (inset.left + inset.right) + "px))";
 }
 
 export function hidePlayhead(host) {

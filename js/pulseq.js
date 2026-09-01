@@ -480,7 +480,6 @@
             blockEnds.push(duration);
         }
         var n = Math.max(2, Math.ceil(duration / dt) + 1);
-        var t = new Float64Array(n);
         var rfRe = new Float64Array(n);
         var rfIm = new Float64Array(n);
         var gx = new Float64Array(n);
@@ -491,7 +490,6 @@
         var bIdx = 0;
         for (var k = 0; k < n; k++) {
             var tk = k * dt;
-            t[k] = tk;
             if (tk > duration) continue;
             while (bIdx < this.blocks.length - 1 && tk >= blockEnds[bIdx]) bIdx++;
             var block = this.blocks[bIdx];
@@ -516,7 +514,6 @@
             dt: dt,
             duration: duration,
             n: n,
-            t: t,
             rfRe: rfRe,
             rfIm: rfIm,
             gx: gx,
@@ -622,28 +619,43 @@
         return turns > TARGET_GRAD_TURNS ? TARGET_GRAD_TURNS / turns : 1;
     }
 
-    function downsampleWaveforms(wf, maxPoints) {
-        maxPoints = maxPoints || 6000;
-        if (wf.n <= maxPoints) return wf;
-        var step = Math.ceil(wf.n / maxPoints);
-        var n = Math.ceil(wf.n / step);
-        function pick(src) {
-            var out = new Float64Array(n);
-            for (var i = 0; i < n; i++) out[i] = src[Math.min(i * step, src.length - 1)];
-            return out;
+    /**
+     * Min/max envelope decimation for plotting. Picking every Nth sample aliases a fast
+     * waveform — a spiral readout came out looking like noise — so each output bin instead
+     * contributes the smallest and largest sample it covers, in the order they occur.
+     * Every raster sample is accounted for, and the drawn line is the true envelope.
+     * Returns x in the units of dtX (so pass dt*1000 to plot milliseconds).
+     */
+    function envelopeSeries(y, n, dtX, maxPoints) {
+        maxPoints = maxPoints || 20000;
+        if (n <= maxPoints) {
+            var xs = new Float64Array(n);
+            for (var i = 0; i < n; i++) xs[i] = i * dtX;
+            return { x: xs, y: y.subarray ? y.subarray(0, n) : y.slice(0, n) };
         }
-        return {
-            dt: wf.dt * step,
-            duration: wf.duration,
-            n: n,
-            t: pick(wf.t),
-            rfRe: pick(wf.rfRe),
-            rfIm: pick(wf.rfIm),
-            gx: pick(wf.gx),
-            gy: pick(wf.gy),
-            gz: pick(wf.gz),
-            adc: pick(wf.adc)
-        };
+        var bins = Math.floor(maxPoints / 2);
+        var per = Math.ceil(n / bins);
+        var outX = new Float64Array(bins * 2);
+        var outY = new Float64Array(bins * 2);
+        var w = 0;
+        for (var b = 0; b < bins; b++) {
+            var start = b * per;
+            if (start >= n) break;
+            var end = Math.min(n, start + per);
+            var lo = start;
+            var hi = start;
+            for (var k = start + 1; k < end; k++) {
+                if (y[k] < y[lo]) lo = k;
+                if (y[k] > y[hi]) hi = k;
+            }
+            var first = lo < hi ? lo : hi;
+            var second = lo < hi ? hi : lo;
+            outX[w] = first * dtX;
+            outY[w++] = y[first];
+            outX[w] = second * dtX;
+            outY[w++] = y[second];
+        }
+        return { x: outX.subarray(0, w), y: outY.subarray(0, w) };
     }
 
     function parse(text) {
@@ -653,12 +665,12 @@
     return {
         parse: parse,
         Sequence: Sequence,
-        downsampleWaveforms: downsampleWaveforms,
         meanOver: meanOver,
         rfToEdu: rfToEdu,
         gradToEdu: gradToEdu,
         peakGradientTurns: peakGradientTurns,
         gradientDisplayFactor: gradientDisplayFactor,
+        envelopeSeries: envelopeSeries,
         decompressShape: decompressShape
     };
 });
