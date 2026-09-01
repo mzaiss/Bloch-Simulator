@@ -1552,12 +1552,6 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 		if (window.PulseqApp && window.PulseqApp.stopPlayback) window.PulseqApp.stopPlayback(true);
 		clearRepTimers();
 		break;
-
-	    case "Pulseq" :
-		$("#pulseqPanel").removeClass("collapsed");
-		var ex = document.getElementById("pulseqExample");
-		if (ex) ex.focus();
-		break;
 		
 	    case "[90°ₓ] TR=5s,spoiled" :
 		TR = 5000; //ms
@@ -1761,7 +1755,6 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 	    addConfigButton("Spoil","RefocusDrop");
 	    addConfigButton("RepExc","SpoilDrop");
 	    addButton("Pause", "RepExcDrop");
-	    addButton("Pulseq", "Pause");
 	    closeMenuIfOpened("PresetsDrop");
 	    closeMenuIfOpened("ExcHardDrop");
 	    closeMenuIfOpened("SoftDrop");
@@ -2588,10 +2581,6 @@ happens in spare time, bug reports and software suggestions may largely be ignor
     
     <div class="EventButtons" style="position:absolute; bottom:3%">
       <button id="Pause" style="height:2em;width:2.5em;font-weight:bold">||<!--&#9646;&#9646;--></button> <!-- ⏸ -->
-    </div>
-
-    <div class="EventButtons" style="position:absolute; bottom:3%">
-      <button id="Pulseq" style="height:2em;width:5.2em;background:#1b2340;color:#dce6ff">Pulseq</button>
     </div>
 </div> <!-- Event menu ends -->
 

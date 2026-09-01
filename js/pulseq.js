@@ -29,6 +29,11 @@
     var PLANE_EDGE_UNITS = 4;
     /** Winding across that half-width that still reads as stripes rather than noise. */
     var TARGET_GRAD_TURNS = 2;
+    /** Below this many raster steps per oscillation a gradient waveform is under-sampled. */
+    var MIN_GRAD_RASTERS_PER_OSCILLATION = 8;
+    /** Smoothing applied to such a waveform: window multiple of the oscillation, passes. */
+    var UNDERSAMPLED_SMOOTH_WINDOWS = 2;
+    var UNDERSAMPLED_SMOOTH_PASSES = 3;
 
     function parseVersionNumber(lines) {
         var major = 0, minor = 0, revision = 0;
@@ -593,6 +598,67 @@
             METRES_PER_SCENE_UNIT * gHzPerM) / stretch;
     }
 
+    /**
+     * Period of the fastest gradient oscillation actually present, in seconds, estimated
+     * from sign changes over the span where gradients are active.
+     */
+    function gradientOscillationPeriod(wf) {
+        var changes = 0;
+        var first = -1;
+        var last = -1;
+        for (var i = 0; i < wf.n; i++) {
+            var g = Math.abs(wf.gx[i]) + Math.abs(wf.gy[i]) + Math.abs(wf.gz[i]);
+            if (g > 1e-9) {
+                if (first < 0) first = i;
+                last = i;
+            }
+            if (i > 0 && wf.gx[i] * wf.gx[i - 1] < 0) changes++;
+        }
+        if (first < 0 || changes === 0) return Infinity;
+        return 2 * (last - first + 1) * wf.dt / changes;
+    }
+
+    /**
+     * A gradient cannot physically turn over in a couple of raster steps, so a waveform
+     * that does was written below its own Nyquist: its k-space trajectory zig-zags instead
+     * of tracing a path. Reported so the panel can say so rather than looking broken.
+     */
+    function gradientSampling(wf, gradRaster) {
+        var period = gradientOscillationPeriod(wf);
+        var rasters = period / (gradRaster || GRAD_RASTER);
+        return {
+            period: period,
+            rasters: rasters,
+            undersampled: rasters < MIN_GRAD_RASTERS_PER_OSCILLATION
+        };
+    }
+
+    /**
+     * Box-car smooth the gradient channels over `windowS` seconds, repeated `passes`
+     * times. Averaging is a convolution, so the gradient moment — the k-space trajectory
+     * the spins actually follow — is preserved; what goes away is the ripple that the
+     * file's raster could not represent and that otherwise makes the spins jitter.
+     */
+    function smoothGradients(wf, windowS, passes) {
+        var half = Math.max(1, Math.round(windowS / wf.dt / 2));
+        var n = wf.n;
+        var prefix = new Float64Array(n + 1);
+        var channels = ["gx", "gy", "gz"];
+        for (var c = 0; c < channels.length; c++) {
+            var y = wf[channels[c]];
+            for (var p = 0; p < (passes || 1); p++) {
+                prefix[0] = 0;
+                for (var i = 0; i < n; i++) prefix[i + 1] = prefix[i] + y[i];
+                for (var j = 0; j < n; j++) {
+                    var a = j - half > 0 ? j - half : 0;
+                    var b = j + half + 1 < n ? j + half + 1 : n;
+                    y[j] = (prefix[b] - prefix[a]) / (b - a);
+                }
+            }
+        }
+        return buildIntegrals(wf);
+    }
+
     /** Largest phase winding, in turns, the sequence puts across the edge of the sample. */
     function peakGradientTurns(wf) {
         var kx = 0;
@@ -670,6 +736,10 @@
         gradToEdu: gradToEdu,
         peakGradientTurns: peakGradientTurns,
         gradientDisplayFactor: gradientDisplayFactor,
+        gradientSampling: gradientSampling,
+        smoothGradients: smoothGradients,
+        UNDERSAMPLED_SMOOTH_WINDOWS: UNDERSAMPLED_SMOOTH_WINDOWS,
+        UNDERSAMPLED_SMOOTH_PASSES: UNDERSAMPLED_SMOOTH_PASSES,
         envelopeSeries: envelopeSeries,
         decompressShape: decompressShape
     };

@@ -10,7 +10,8 @@ import {
 const EXAMPLES = [
     { name: "Choose example…", path: "" },
     { name: "FID (variable flip)", path: "seq/web1_FID.seq" },
-    { name: "Spin echo", path: "seq/web2_SpinEcho_me.seq" },
+    { name: "Spin echo (CPMG)", path: "seq/web2_SpinEcho_me.seq" },
+    { name: "Spin echo (non-CPMG)", path: "seq/web2_SpinEcho_nonCPMG.seq" },
     { name: "Spin echo (sinc)", path: "seq/web2_SpinEcho_sinc.seq" },
     { name: "FLASH 16", path: "seq/web3_FLASH_16.seq" },
     { name: "RARE 16", path: "seq/web4_RARE_16.seq" },
@@ -40,7 +41,8 @@ var loaded = {
     waveforms: null,
     summary: null,
     hasGradients: false,
-    gradFactor: 1
+    gradFactor: 1,
+    sampling: null
 };
 var player = {
     playing: false,
@@ -94,10 +96,14 @@ function formatSummary(sum) {
     var scaled = loaded.gradFactor < 1
         ? "  ·  gradients ×" + loaded.gradFactor.toPrecision(2) + " to keep dephasing readable"
         : "";
+    var undersampled = loaded.sampling && loaded.sampling.undersampled
+        ? "  ·  gradient waveform under-sampled in the file (turns over every " +
+            loaded.sampling.rasters.toFixed(1) + " raster steps), smoothed to keep k-space"
+        : "";
     return sum.name + "  v" + sum.version +
         "  ·  " + sum.nBlocks + " blocks  ·  " + sum.nRf + " RF  ·  " + sum.nAdc + " ADC  ·  " +
         (sum.duration * 1000).toFixed(1) + " ms" +
-        (flips ? "  ·  flips " + flips : "") + scaled;
+        (flips ? "  ·  flips " + flips : "") + scaled + undersampled;
 }
 
 function sliderToSpeed(pos) {
@@ -132,6 +138,15 @@ async function loadSeqText(text, name) {
     loaded.hasGradients = false;
     for (var i = 0; i < waveforms.n && !loaded.hasGradients; i++) {
         if (Math.abs(waveforms.gx[i]) > 1 || Math.abs(waveforms.gy[i]) > 1) loaded.hasGradients = true;
+    }
+    // A waveform written below its own Nyquist zig-zags rather than tracing a path, which
+    // reads as noise in the plot and throws the spins about. Averaging over one
+    // oscillation keeps the k-space trajectory and drops what the raster could not hold.
+    loaded.sampling = Pulseq.gradientSampling(waveforms, seq.rasters.grad);
+    if (loaded.sampling.undersampled) {
+        Pulseq.smoothGradients(waveforms,
+            loaded.sampling.period * Pulseq.UNDERSAMPLED_SMOOTH_WINDOWS,
+            Pulseq.UNDERSAMPLED_SMOOTH_PASSES);
     }
     loaded.gradFactor = Pulseq.gradientDisplayFactor(waveforms);
     player.stretch = autoStretch(waveforms.duration);
