@@ -290,9 +290,11 @@ function replay(wf, fps, stretch, gradScale) {
         "[BLOCKS]", "1 10 0 1 0 0 0 0",
         "# id amplitude shape_id time_id delay",
         "[GRADIENTS]", "1 1000 1 2 0",
+        // Shapes holding exactly num_samples entries are stored raw: amplitudes 0..1,
+        // and sample times in gradient-raster units.
         "[SHAPES]",
-        "shape_id 1", "num_samples 4", "0", "1", "0", "-1",
-        "shape_id 2", "num_samples 4", "0", "2", "6", "2"
+        "shape_id 1", "num_samples 4", "0", "1", "1", "0",
+        "shape_id 2", "num_samples 4", "0", "2", "8", "10"
     ].join("\n"));
 
     almost(seq.summary().duration, 100e-6, 1e-12, "block duration from the v1.4 field");
@@ -309,12 +311,87 @@ function replay(wf, fps, stretch, gradScale) {
         moment.toFixed(5), "Hz/m*s");
 })();
 
+(function testGradientDisplayFactor() {
+    // Sequences that stay under a couple of turns keep the plain physical scale; the ones
+    // that would wind far past the isochromat spacing get scaled down to the target.
+    var expectations = {
+        "web5_EPI_16.seq": 1,
+        "web3_FLASH_16.seq": 0,
+        "web4_RARE_16.seq": 0,
+        "spiral_tse_ss.seq": 0
+    };
+    Object.keys(expectations).forEach(function (file) {
+        var seq = Pulseq.parse(readSeq(file));
+        var wf = seq.rasterize(seq.suggestedRaster());
+        var turns = Pulseq.peakGradientTurns(wf);
+        var factor = Pulseq.gradientDisplayFactor(wf);
+        if (expectations[file] === 1) {
+            assert.strictEqual(factor, 1, file + " should keep the physical scale");
+            assert.ok(turns <= 2, file + " winding " + turns.toFixed(2) + " turns");
+        } else {
+            assert.ok(factor < 1, file + " should be scaled down, factor " + factor);
+            almost(turns * factor, 2, 1e-9, file + " scaled winding");
+        }
+        console.log("ok gradient scale " + file + ": " + turns.toFixed(2) +
+            " turns, factor " + factor.toPrecision(3));
+    });
+})();
+
 (function testShapeDecompressBlockPulse() {
     var samples = Pulseq.decompressShape([1, 0, 0, 997, -1, 0, 0, 17], 1020);
     assert.strictEqual(samples.length, 1020);
     var ones = 0;
     for (var i = 0; i < samples.length; i++) if (Math.abs(samples[i] - 1) < 1e-9) ones++;
     assert.ok(ones >= 990 && ones <= 1010, "block pulse ones=" + ones);
+
+    // A run's third entry is a repeat count, not a value: [2,2,2,7] is four 2s then a 7,
+    // and reading the count as a value made the integration run away.
+    var run = Pulseq.decompressShape([2, 2, 2, 7], 0);
+    assert.deepStrictEqual(run, [2, 4, 6, 8, 15], "run count must be consumed");
+
+    // A shape whose entry count equals num_samples is stored raw, not integrated.
+    assert.deepStrictEqual(Pulseq.decompressShape([0, 1, 1, 0], 4), [0, 1, 1, 0],
+        "uncompressed shape passes through");
+})();
+
+(function testSpiralTseParsesAsRealTse() {
+    // A v1.4.2 spiral TSE: exercises time-shaped gradients, long arbitrary spiral
+    // waveforms and RLE-compressed RF shapes.
+    var seq = Pulseq.parse(readSeq("spiral_tse_ss.seq"));
+    var sum = seq.summary();
+    assert.strictEqual(sum.version, "1.4.2");
+    // Matches the TotalDuration the file declares, with the 0.5 s tail block removed.
+    almost(sum.duration, 0.21774, 1e-9, "spiral TSE duration");
+    assert.strictEqual(sum.nRf, 5);
+    almost(sum.flips[0], 90, 0.5, "excitation");
+    for (var i = 1; i < sum.flips.length; i++) almost(sum.flips[i], 180, 0.5, "refocus " + i);
+
+    // Normalized RF magnitude shapes are the tell-tale of correct decompression.
+    for (var id in seq.rf) {
+        var mag = seq.shapes[seq.rf[id].mag_id].samples;
+        var peak = 0;
+        for (var k = 0; k < mag.length; k++) peak = Math.max(peak, Math.abs(mag[k]));
+        almost(peak, 1, 1e-6, "RF " + id + " magnitude shape should peak at 1");
+    }
+
+    var timeShaped = [];
+    for (var g in seq.gradients) if (seq.gradients[g].time_id) timeShaped.push(g);
+    assert.ok(timeShaped.length >= 4, "spiral TSE should use gradient time shapes");
+
+    var wf = seq.rasterize(seq.suggestedRaster());
+    var peakRf = 0, maxGx = 0, maxGy = 0, both = 0;
+    for (var j = 0; j < wf.n; j++) {
+        peakRf = Math.max(peakRf, Math.hypot(wf.rfRe[j], wf.rfIm[j]));
+        maxGx = Math.max(maxGx, Math.abs(wf.gx[j]));
+        maxGy = Math.max(maxGy, Math.abs(wf.gy[j]));
+        if (Math.abs(wf.gx[j]) > 1 && Math.abs(wf.gy[j]) > 1) both++;
+    }
+    almost(peakRf, 987.454, 1, "peak RF should match the [RF] amplitude");
+    assert.ok(maxGx > 1e6 && maxGy > 1e6, "spiral gradients " + maxGx + " " + maxGy);
+    assert.ok(both > 1000, "a spiral runs Gx and Gy together, samples: " + both);
+    console.log("ok spiral TSE:", sum.nBlocks, "blocks,", (sum.duration * 1000).toFixed(1),
+        "ms, flips", sum.flips.join("/"), ", time-shaped gradients", timeShaped.join(","),
+        ", oblique samples", both);
 })();
 
 console.log("All pulseq tests passed.");

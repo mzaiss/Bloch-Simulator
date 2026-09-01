@@ -14,7 +14,8 @@ const EXAMPLES = [
     { name: "Spin echo (sinc)", path: "seq/web2_SpinEcho_sinc.seq" },
     { name: "FLASH 16", path: "seq/web3_FLASH_16.seq" },
     { name: "RARE 16", path: "seq/web4_RARE_16.seq" },
-    { name: "EPI 16", path: "seq/web5_EPI_16.seq" }
+    { name: "EPI 16", path: "seq/web5_EPI_16.seq" },
+    { name: "Spiral TSE", path: "seq/spiral_tse_ss.seq" }
 ];
 
 const TARGET_PLAY_S = 8;
@@ -38,7 +39,8 @@ var loaded = {
     seq: null,
     waveforms: null,
     summary: null,
-    hasGradients: false
+    hasGradients: false,
+    gradFactor: 1
 };
 var player = {
     playing: false,
@@ -89,10 +91,13 @@ function setStatus(text, isError) {
 function formatSummary(sum) {
     var flips = sum.flips.slice(0, 8).map(function (f) { return f + "°"; }).join(", ");
     if (sum.flips.length > 8) flips += ", …";
+    var scaled = loaded.gradFactor < 1
+        ? "  ·  gradients ×" + loaded.gradFactor.toPrecision(2) + " to keep dephasing readable"
+        : "";
     return sum.name + "  v" + sum.version +
         "  ·  " + sum.nBlocks + " blocks  ·  " + sum.nRf + " RF  ·  " + sum.nAdc + " ADC  ·  " +
         (sum.duration * 1000).toFixed(1) + " ms" +
-        (flips ? "  ·  flips " + flips : "");
+        (flips ? "  ·  flips " + flips : "") + scaled;
 }
 
 function sliderToSpeed(pos) {
@@ -128,6 +133,7 @@ async function loadSeqText(text, name) {
     for (var i = 0; i < waveforms.n && !loaded.hasGradients; i++) {
         if (Math.abs(waveforms.gx[i]) > 1 || Math.abs(waveforms.gy[i]) > 1) loaded.hasGradients = true;
     }
+    loaded.gradFactor = Pulseq.gradientDisplayFactor(waveforms);
     player.stretch = autoStretch(waveforms.duration);
     setStatus(formatSummary(summary));
     $("pulseqPlay").disabled = false;
@@ -207,8 +213,8 @@ function driveState(state, mean, stretch) {
     state.areaLeftRF = 0;
     state.areaLeftGrad = 0;
     var gradScale = gradScaleOf();
-    state.Gx = Pulseq.gradToEdu(mean.gx, stretch, gradScale);
-    state.Gy = Pulseq.gradToEdu(mean.gy, stretch, gradScale);
+    state.Gx = Pulseq.gradToEdu(mean.gx, stretch, gradScale) * loaded.gradFactor;
+    state.Gy = Pulseq.gradToEdu(mean.gy, stretch, gradScale) * loaded.gradFactor;
 }
 
 /**

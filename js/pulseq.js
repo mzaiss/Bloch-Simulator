@@ -25,6 +25,10 @@
     var DEFAULT_GRAD_SCALE = 11;
     /** Physical size of one scene unit; sets how strongly a gradient dephases the sample. */
     var METRES_PER_SCENE_UNIT = 0.015;
+    /** Half-width of the Plane sample, in scene units. */
+    var PLANE_EDGE_UNITS = 4;
+    /** Winding across that half-width that still reads as stripes rather than noise. */
+    var TARGET_GRAD_TURNS = 2;
 
     function parseVersionNumber(lines) {
         var major = 0, minor = 0, revision = 0;
@@ -48,25 +52,37 @@
         return def;
     }
 
-    function decompressShape(samples, expectedCount) {
-        var temp = [];
-        for (var idx = 0; idx < samples.length; idx++) {
-            var value = samples[idx];
-            if (temp.length >= 2 && samples[idx - 1] === samples[idx - 2]) {
-                for (var r = 0; r < value; r++) temp.push(samples[idx - 1]);
+    /**
+     * Pulseq shape decoding, following the reference implementation: a shape holding
+     * exactly num_samples entries is stored raw, otherwise the entries are the derivative
+     * run-length encoded, where two equal values open a run and the entry after them is
+     * the count of *additional* repeats. That third entry must be consumed, not read as a
+     * value, or the integration runs away.
+     */
+    function decompressShape(compressed, expectedCount) {
+        if (expectedCount > 0 && compressed.length === expectedCount) return compressed.slice();
+
+        var deriv = [];
+        var i = 0;
+        while (i < compressed.length) {
+            var value = compressed[i];
+            deriv.push(value);
+            if (i + 1 < compressed.length && compressed[i + 1] === value) {
+                deriv.push(value);
+                var extra = i + 2 < compressed.length ? compressed[i + 2] : 0;
+                for (var r = 0; r < extra; r++) deriv.push(value);
+                i += 3;
             } else {
-                temp.push(value);
+                i += 1;
             }
         }
-        var out = new Array(temp.length);
+
+        var count = expectedCount > 0 ? Math.min(expectedCount, deriv.length) : deriv.length;
+        var out = new Array(count);
         var acc = 0;
-        for (var j = 0; j < temp.length; j++) {
-            acc += temp[j];
+        for (var j = 0; j < count; j++) {
+            acc += deriv[j];
             out[j] = acc;
-        }
-        if (expectedCount > 0 && out.length !== expectedCount) {
-            // Some files store already-uncompressed samples. Fall back if RLE exploded.
-            if (samples.length === expectedCount) return samples.slice();
         }
         return out;
     }
@@ -580,6 +596,32 @@
             METRES_PER_SCENE_UNIT * gHzPerM) / stretch;
     }
 
+    /** Largest phase winding, in turns, the sequence puts across the edge of the sample. */
+    function peakGradientTurns(wf) {
+        var kx = 0;
+        var ky = 0;
+        var peak = 0;
+        for (var i = 1; i < wf.n; i++) {
+            kx += 0.5 * (wf.gx[i - 1] + wf.gx[i]) * wf.dt;
+            ky += 0.5 * (wf.gy[i - 1] + wf.gy[i]) * wf.dt;
+            var r = Math.sqrt(kx * kx + ky * ky);
+            if (r > peak) peak = r;
+        }
+        return peak * PLANE_EDGE_UNITS * METRES_PER_SCENE_UNIT;
+    }
+
+    /**
+     * Factor applied to gradients for display. The sample is only ~20 isochromats across,
+     * so a sequence whose k-space excursion winds far more than a couple of turns over it
+     * shows nothing but aliasing — and no playback speed helps, since the total phase is
+     * what is large. Sequences under the target keep the plain physical scale, so their
+     * dephasing stays comparable with each other.
+     */
+    function gradientDisplayFactor(wf) {
+        var turns = peakGradientTurns(wf);
+        return turns > TARGET_GRAD_TURNS ? TARGET_GRAD_TURNS / turns : 1;
+    }
+
     function downsampleWaveforms(wf, maxPoints) {
         maxPoints = maxPoints || 6000;
         if (wf.n <= maxPoints) return wf;
@@ -615,6 +657,8 @@
         meanOver: meanOver,
         rfToEdu: rfToEdu,
         gradToEdu: gradToEdu,
+        peakGradientTurns: peakGradientTurns,
+        gradientDisplayFactor: gradientDisplayFactor,
         decompressShape: decompressShape
     };
 });

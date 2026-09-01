@@ -35,6 +35,8 @@ Plot rows follow the 3D view's colours: RF magnitude in **yellow** (like the B1 
 
 Playback **integrates** the waveforms over each animation frame rather than sampling them once, and splits the frame into several Bloch steps while RF is on. Flip angles and gradient moments therefore come out the same at any frame rate and at any playback speed. The speed slider is logarithmic and spans 0.002× to 5×; the slow end is what makes an individual gradient lobe readable, since a strong gradient can wind more than half a turn per frame at 5×.
 
+The sample is only about 20 isochromats across, so a sequence whose k-space excursion would wind far more than a couple of turns across it can only show aliasing. Such sequences get their gradients scaled down for display, and the panel says by how much; sequences that stay under the target (e.g. the EPI example) keep the plain physical scale so their dephasing stays comparable.
+
 Sequences are rasterized at half the finest raster the file declares — 0.5 µs for a typical 1 µs RF raster — so gradient corners and RF samples land on the grid. Very long sequences fall back to a coarser step to stay within a 300k-sample budget. Gradients defined with a Pulseq **time shape** (extended trapezoids and other non-uniform shapes, `time_id` from file version 1.4) are read at their own sample times rather than assumed to sit on the gradient raster.
 
 Example sequences (from [MRTwin_pulseq BlochSimWeb](https://github.com/mzaiss/MRTwin_pulseq/tree/mr0-core/BlochSimWeb)):
@@ -45,6 +47,7 @@ Example sequences (from [MRTwin_pulseq BlochSimWeb](https://github.com/mzaiss/MR
 - `seq/web3_FLASH_16.seq` — 16-line FLASH
 - `seq/web4_RARE_16.seq` — 16-echo RARE
 - `seq/web5_EPI_16.seq` — 16-line EPI
+- `seq/spiral_tse_ss.seq` — single-shot spiral TSE (Pulseq v1.4.2, time-shaped spiral gradients); the 0.5 s delay block at the end of the original file was removed
 
 Parser tests: `node tests/pulseq.test.js`
 
