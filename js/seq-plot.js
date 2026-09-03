@@ -14,8 +14,13 @@ export const LAB_SHELL_BG = "#0f1424";
  */
 const PLOT_MAX_POINTS = 20000;
 
-/** Plot area insets used for every row, so the playhead can line up with the x axis. */
-const GRID_LEFT = 54;
+/**
+ * Plot area insets used for every row, so the playhead can line up with the x axis.
+ * The left one only has to hold the row name turned on its side, since the rows carry no
+ * y tick labels: this is a qualitative view of the shape of the sequence, and in a row
+ * 50 px tall the numbers cost more width than the scale they gave was worth.
+ */
+const GRID_LEFT = 20;
 const GRID_RIGHT = 8;
 
 const COLORS = {
@@ -61,11 +66,11 @@ export function buildPlotPanels(wf) {
         timeUnit: "ms",
         durationMs: wf.duration * 1000,
         panels: [
-            panel("RF (Hz)", "|RF|", COLORS.rf, row(rf.mag)),
-            panel("RF phase (rad)", "RF phase", COLORS.rfPhase, row(rf.phase)),
-            panel("GX (Hz/m)", "GX", COLORS.gx, row(wf.gx)),
-            panel("GY (Hz/m)", "GY", COLORS.gy, row(wf.gy)),
-            panel("GZ (Hz/m)", "GZ", COLORS.gz, row(wf.gz)),
+            panel("RF", "|RF|", COLORS.rf, row(rf.mag)),
+            panel("RF phase", "RF phase", COLORS.rfPhase, row(rf.phase)),
+            panel("GX", "GX", COLORS.gx, row(wf.gx)),
+            panel("GY", "GY", COLORS.gy, row(wf.gy)),
+            panel("GZ", "GZ", COLORS.gz, row(wf.gz)),
             panel("ADC", "ADC", COLORS.adc, row(wf.adc))
         ]
     };
@@ -79,13 +84,9 @@ function disposeCharts(host) {
     host.charts = [];
 }
 
-/** Three significant digits, so gradient tick labels stay narrow enough to read. */
-function formatYTick(value) {
-    if (!isFinite(value)) return "";
-    if (value === 0) return "0";
-    var abs = Math.abs(value);
-    if (abs >= 1e4 || abs < 1e-3) return value.toExponential(1);
-    return String(Number(value.toPrecision(3)));
+/** Suppresses every tick label on an axis (ChartGPU drops a tick whose label is null). */
+function noTickLabels() {
+    return null;
 }
 
 function seqChartGpuLabTheme(preset, fontSize) {
@@ -179,8 +180,10 @@ async function renderChartGpu(stack, payload, host) {
             gridLines: { vertical: { count: 5 } },
             xAxis: isBottom
                 ? { name: "t (ms)" }
-                : { tickFormatter: function () { return null; }, tickLength: 0 },
-            yAxis: { name: panel.title, tickFormatter: formatYTick },
+                : { tickFormatter: noTickLabels, tickLength: 0 },
+            // The name stays as the only way to tell one row from another; ChartGPU draws
+            // it turned on its side just inside the grid once no tick labels push it out.
+            yAxis: { name: panel.title, tickFormatter: noTickLabels, tickLength: 0 },
             // No dataZoom: the whole sequence is shown at once, with no wheel zoom
             // and no slider under the bottom row.
             dataZoom: [],

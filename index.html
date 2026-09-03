@@ -497,6 +497,18 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 		scene.remove(this.shadow);
 		scene.remove(this.tshadow);
 	    }
+	    // Removing a mesh from the scene leaves its buffers on the GPU, which a scene
+	    // of a thousand isochromates makes expensive to leak on every scene change.
+	    // Each isochromate owns its geometries and its own magnetization material; the
+	    // torque, B1eff and shadow materials are shared and must outlive it.
+	    this.cylMesh.geometry.dispose();
+	    this.cylMesh.material.dispose();
+	    this.torque.geometry.dispose();
+	    this.B1eff.geometry.dispose();
+	    if (myShadow) {
+		this.shadow.geometry.dispose();
+		this.tshadow.geometry.dispose();
+	    }
 	}
 
 	function scaleIsocArr(isocArr, factor) {
@@ -743,14 +755,25 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 		      RFfunc:RFconst,
 		      viewMx:true}; }
 	
-	    scenes.IsocInhomN = function (nIsoc) {
-		let inhom = {IsocArr:[]};
+	    // Field offsets of an nIsoc-strong T2' distribution: dense near resonance with
+	    // long tails, so the sum decays instead of recurring. Shared, so a sample built
+	    // from the distribution dephases at the same rate wherever it is used.
+	    function inhomOffsets(nIsoc) {
 		const spreadScale = 1/6; 
 		const nonlinScale = Math.PI/1.5; //reduces recovery
+		let offsets = [];
+		for(let i=0; i<nIsoc; i++)
+		    offsets.push(
+			Math.tan( (i-(nIsoc-1)/2) / (nIsoc/nonlinScale) ) * spreadScale);
+		return offsets;
+	    } //inhomOffsets
+
+	    scenes.IsocInhomN = function (nIsoc) {
+		let inhom = {IsocArr:[]};
+		let offsets = inhomOffsets(nIsoc);
 		for(let i=0; i<nIsoc; i++) {
 		    inhom.IsocArr.push(IsocZ());
-		    inhom.IsocArr[i].dB0 =
-			Math.tan( (i-(nIsoc-1)/2) / (nIsoc/nonlinScale) ) * spreadScale;
+		    inhom.IsocArr[i].dB0 = offsets[i];
 		}
 		return inhom;
 	    } //IsocInhomN
@@ -881,6 +904,34 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 			plane[i*nIsoc+j].pos.set((j-(nIsoc-1)/2)*0.4,(i-(nIsoc-1)/2)*0.4,0);
 		    }
 		}
+		return {IsocArr: plane, allScale: 0.35};
+	    }
+
+	    // Plane carrying the Inhomogeneity scene's whole T2' distribution at every
+	    // position, so the sample dephases in place as well as along a gradient and a
+	    // refocusing pulse brings both back. Half as many positions per axis as Plane
+	    // over the same extent, since each one costs nInhom isochromates: even so, this
+	    // is 11*11*9 = 1089 against Plane's 441, and every isochromate owns five meshes.
+	    scenes.PlaneInhom = function () {
+		const nIsoc = 11;  // odd, so one position sits at the centre.
+		const nInhom = 9;  // as scenes.Inhomogeneity.
+		const step = 0.8;  // Plane's extent, sampled half as finely.
+		let offsets = inhomOffsets(nInhom);
+		var plane = [];
+		// Distribution outermost, so consecutive isochromates step along x at a
+		// fixed offset: Gx refocus reads its phase gradient off neighbouring pairs
+		// and would otherwise measure the spread of the distribution instead.
+		for(let k=0; k<nInhom; k++)
+		    for(let i=0; i<nIsoc; i++)
+			for(let j=0; j<nIsoc; j++) {
+			    // Coarser cylinders than Plane's default 8 facets, since each
+			    // arrow carries its own geometry and at this size, drawn nine
+			    // deep, the facets cannot be seen.
+			    let isoc = new Isoc(z, white, nullvec, 4);
+			    isoc.pos.set((j-(nIsoc-1)/2)*step, (i-(nIsoc-1)/2)*step, 0);
+			    isoc.dB0 = offsets[k];
+			    plane.push(isoc);
+			}
 		return {IsocArr: plane, allScale: 0.35};
 	    }
 	    
@@ -1022,6 +1073,9 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 	    case 'Plane':
 		state = Object.assign(state, scenes.Plane());
 		frameFixed = true; break;				   
+	    case 'Plane Inhom':
+		state = Object.assign(state, scenes.PlaneInhom());
+		frameFixed = true; break;
 	    default: alert("Sample changed to "+state.Sample);
 	    }
 
@@ -1145,7 +1199,8 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 						'Line, dense',
 						'Periodic',
 						'Thermal ensemble',
-						'Plane']
+						'Plane',
+						'Plane Inhom']
 					      ).//listen(). //only listen() when external changes needs attention
 				 onChange( function () { trigSampleChange = true; });
 				 guiFolder.add(blochMenu, 'Reset');
@@ -1477,8 +1532,9 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 	    }
 
 	    if (spoiling) {
+		let heavyScene = (state.Sample == 'Plane') || (state.Sample == 'Plane Inhom');
 		let timeBeforeSpoil = TR-spoilDuration-200
-		    -300*(state.Sample == 'Plane'); //reduction need for plane, especially.
+		    -300*heavyScene; //reduction need for plane, especially.
 		
 		spoilTimer1 = window.setTimeout(function () {spoil()}, timeBeforeSpoil);
 		spoilTimer2 = window.setTimeout(function () {
@@ -1515,6 +1571,8 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 	    case "Ensemble" : state.Sample = "Ensemble";
 		trigSampleChange = true; break;
 	    case "Plane" : state.Sample = "Plane";
+		trigSampleChange = true; break;
+	    case "Plane Inhom" : state.Sample = "Plane Inhom";
 		trigSampleChange = true; break;
 //	    case "90°ʸ hard" : ApplyToAll(propagator90y); break;
 	    case "90°ₓ hard" : RFpulse('rect', Math.PI/2, Math.PI, 4); break;
@@ -2517,7 +2575,8 @@ happens in spare time, bug reports and software suggestions may largely be ignor
       <li id="Stronggradient"><a class="PresetsAction">Strong gradient</a></li>
       <li id="Structure"><a class="PresetsAction">Structure</a></li>
       <li id="Ensemble"><a class="PresetsAction">Ensemble</a></li>
-      <li id="Plane"><a class="PresetsAction">Plane</a></li>      
+      <li id="Plane"><a class="PresetsAction">Plane</a></li>
+      <li id="PlaneInhom"><a class="PresetsAction">Plane Inhom</a></li>      
       <li id="Saving"> <a class="PresetsAction">Save</a></li> 
     </ul>
 
@@ -2603,9 +2662,9 @@ happens in spare time, bug reports and software suggestions may largely be ignor
       </label>
       <button id="pulseqPlay" type="button" disabled>Play</button>
       <label class="pulseq-speed">speed
-        <input id="pulseqSpeed" type="range" min="0" max="1000" step="1" value="675"
+        <input id="pulseqSpeed" type="range" min="0" max="1000" step="1" value="500"
                title="playback speed (logarithmic, 0.002× to 20×)">
-        <span id="pulseqSpeedLabel">1×</span>
+        <span id="pulseqSpeedLabel">0.20×</span>
       </label>
       <label class="pulseq-repeat">
         <input id="pulseqRepeat" type="checkbox"> repeat

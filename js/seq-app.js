@@ -7,16 +7,18 @@ import {
     hidePlayhead
 } from "./seq-plot.js";
 
+// The 0D examples have no imaging gradients, so they are pure signal experiments; the 2D
+// ones encode a k-space plane and are the ones the gradient normalization applies to.
 const EXAMPLES = [
     { name: "Choose example…", path: "" },
-    { name: "FID (variable flip)", path: "seq/web1_FID.seq" },
-    { name: "Spin echo (CPMG)", path: "seq/web2_SpinEcho_me.seq" },
-    { name: "Spin echo (non-CPMG)", path: "seq/web2_SpinEcho_nonCPMG.seq" },
-    { name: "Spin echo (sinc)", path: "seq/web2_SpinEcho_sinc.seq" },
-    { name: "FLASH 16", path: "seq/web3_FLASH_16.seq" },
-    { name: "RARE 16", path: "seq/web4_RARE_16.seq" },
-    { name: "EPI 16", path: "seq/web5_EPI_16.seq" },
-    { name: "Spiral TSE", path: "seq/spiral_tse_ss.seq" }
+    { name: "0D FID (variable flip)", path: "seq/web1_FID.seq" },
+    { name: "0D spin echo (CPMG)", path: "seq/web2_SpinEcho_me.seq" },
+    { name: "0D spin echo (non-CPMG)", path: "seq/web2_SpinEcho_nonCPMG.seq" },
+    { name: "0D spin echo (sinc)", path: "seq/web2_SpinEcho_sinc.seq" },
+    { name: "2D FLASH 16", path: "seq/web3_FLASH_16.seq" },
+    { name: "2D RARE 16", path: "seq/web4_RARE_16.seq" },
+    { name: "2D EPI 16", path: "seq/web5_EPI_16.seq" },
+    { name: "2D spiral TSE", path: "seq/spiral_tse_ss.seq" }
 ];
 
 const TARGET_PLAY_S = 8;
@@ -24,7 +26,7 @@ const MIN_STRETCH = 10;
 const MAX_STRETCH = 400;
 /** Largest Bloch rotation per sub-step while RF is on, where B1 and B0 do not commute. */
 const MAX_SUBSTEP_ANGLE = 0.05;
-/** Isochromat updates per frame the sub-stepping may spend (Plane is 441 spins). */
+/** Isochromat updates per frame the sub-stepping may spend (Plane 441, Plane Inhom 1089). */
 const SUBSTEP_BUDGET = 8000;
 const SUBSTEP_LIMIT = 128;
 /** RF counts as on above this fraction of the sequence peak (sinc zero crossings). */
@@ -48,7 +50,7 @@ var player = {
     playing: false,
     t: 0,
     stretch: 80,
-    speed: 1,
+    speed: 0.2,
     rfWasOn: false,
     guiAge: 0,
     rfOnThreshold: 0,

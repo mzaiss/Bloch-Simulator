@@ -27,7 +27,9 @@ Local: serve the folder over HTTP (needed for example `.seq` files and ChartGPU)
 
 Load a Pulseq `.seq` file (or pick an example). The sequence is shown as a ChartGPU `seq.plot` (same stacked RF / GX / GY / GZ / ADC view as [anyfield](https://github.com/mrx-org/anyfield/blob/main/pypulseq/seq_plot.js)). **Play** runs the waveforms on the Bloch simulator. Time is stretched so a short sequence is watchable; use the speed slider to go faster or slower.
 
-Defaults: B0 rotating frame, B1 view (not torque/B1eff), and a circular lab floor so the rotating frame does not show a spinning rectangle. Play never changes the scene, so a sequence can be watched in any of them. Gradients act through position, so choose a scene with spatial extent — **Plane**, **Weak/Strong gradient** or **Structure** — to see Gx/Gy dephase the sample; single-isochromat scenes such as Equilibrium show the RF only.
+Defaults: B0 rotating frame, B1 view (not torque/B1eff), and a circular lab floor so the rotating frame does not show a spinning rectangle. Play never changes the scene, so a sequence can be watched in any of them. Gradients act through position, so choose a scene with spatial extent — **Plane**, **Plane Inhom**, **Weak/Strong gradient** or **Structure** — to see Gx/Gy dephase the sample; single-isochromat scenes such as Equilibrium show the RF only.
+
+**Plane Inhom** is the Plane with the whole T2′ distribution of the Inhomogeneity scene — the same nine tan-spread field offsets — sitting at every position, so the sample dephases in place as well as along a gradient and a refocusing pulse brings both back at once. It samples 11×11 positions rather than Plane's 21×21, over the same extent: each position costs nine isochromats, so this is already 1089 against Plane's 441, and every isochromat owns five meshes of its own. Halving the sampling happens to leave the gradient scaling untouched — 11 positions can only carry five turns of winding, which is exactly the display target, so the Nyquist cap and the target coincide and sequences play at the same factor as in Plane.
 
 **repeat** restarts the sequence from equilibrium each time it ends.
 
@@ -49,7 +51,7 @@ Formats **v1.2 through v1.5** are read. Each revision inserted columns into the 
 
 Sequences are rasterized at half the finest raster the file declares — 0.5 µs for a typical 1 µs RF raster — so gradient corners and RF samples land on the grid. Very long sequences fall back to a coarser step to stay within a 300k-sample budget. Gradients defined with a Pulseq **time shape** (extended trapezoids and other non-uniform shapes, `time_id` from v1.4) are read at their own sample times; those without one step at raster centres, sample *i* covering the interval from *i* to *i*+1 rasters, so a shaped gradient's area is exactly the raster times the sum of its samples.
 
-Example sequences (from [MRTwin_pulseq BlochSimWeb](https://github.com/mzaiss/MRTwin_pulseq/tree/mr0-core/BlochSimWeb)):
+Example sequences (from [MRTwin_pulseq BlochSimWeb](https://github.com/mzaiss/MRTwin_pulseq/tree/mr0-core/BlochSimWeb)). The menu labels them **0D** or **2D**: the 0D ones carry no gradient events at all and so are pure signal experiments, while the 2D ones encode a k-space plane and are what the gradient normalization below acts on.
 
 - `seq/web1_FID.seq` — block-pulse FID, flip angles 30°…360°
 - `seq/web2_SpinEcho_me.seq` — 90° then a train of 180°s, refocusing 90° from the excitation (CPMG)
