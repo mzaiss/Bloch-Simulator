@@ -311,30 +311,110 @@ function replay(wf, fps, stretch, gradScale) {
         moment.toFixed(5), "Hz/m*s");
 })();
 
-(function testGradientDisplayFactor() {
-    // Sequences that stay under a couple of turns keep the plain physical scale; the ones
-    // that would wind far past the isochromat spacing get scaled down to the target.
-    var expectations = {
-        "web5_EPI_16.seq": 1,
-        "web3_FLASH_16.seq": 0,
-        "web4_RARE_16.seq": 0,
-        "spiral_tse_ss.seq": 0
-    };
-    Object.keys(expectations).forEach(function (file) {
+(function testTrajectoryFollowsTheRfPulses() {
+    // The trajectory restarts at an excitation and inverts at a refocusing pulse, as in
+    // Pulseq's own k-space calculation. Without both, a running integral from t=0 reports
+    // a winding no spin ever carries.
+    var cases = { "web4_RARE_16.seq": [1, 16], "web5_EPI_16.seq": [1, 0],
+        "web3_FLASH_16.seq": [16, 0], "spiral_tse_ss.seq": [1, 4] };
+    Object.keys(cases).forEach(function (file) {
         var seq = Pulseq.parse(readSeq(file));
         var wf = seq.rasterize(seq.suggestedRaster());
-        var turns = Pulseq.peakGradientTurns(wf);
-        var factor = Pulseq.gradientDisplayFactor(wf);
-        if (expectations[file] === 1) {
-            assert.strictEqual(factor, 1, file + " should keep the physical scale");
-            assert.ok(turns <= 2, file + " winding " + turns.toFixed(2) + " turns");
-        } else {
-            assert.ok(factor < 1, file + " should be scaled down, factor " + factor);
-            almost(turns * factor, 2, 1e-9, file + " scaled winding");
+        assert.strictEqual(wf.excitationTimes.length, cases[file][0], file + " excitations");
+        assert.strictEqual(wf.refocusTimes.length, cases[file][1], file + " refocusings");
+
+        // Every RF time must sit inside the block that holds the pulse.
+        var spans = [];
+        var t = 0;
+        for (var i = 0; i < seq.blocks.length; i++) {
+            var dur = seq.blockDurationUs(seq.blocks[i]) * 1e-6;
+            if (seq.blocks[i].rf) spans.push([t, t + dur]);
+            t += dur;
         }
-        console.log("ok gradient scale " + file + ": " + turns.toFixed(2) +
-            " turns, factor " + factor.toPrecision(3));
+        wf.excitationTimes.concat(wf.refocusTimes).forEach(function (rt) {
+            assert.ok(spans.some(function (s) { return rt > s[0] && rt < s[1]; }),
+                file + ": RF time " + rt + " falls outside every RF block");
+        });
     });
+
+    // The echo train is the case that goes wrong without the inversions.
+    var rare = Pulseq.parse(readSeq("web4_RARE_16.seq"));
+    var rareWf = rare.rasterize(rare.suggestedRaster());
+    var withRf = Pulseq.peakGradientTurns(rareWf);
+    var naive = Pulseq.peakGradientTurns({
+        n: rareWf.n, dt: rareWf.dt, cum: rareWf.cum, adcSampleTimes: []
+    });
+    assert.ok(withRf < 5, "RARE winding with the RF pulses: " + withRf.toFixed(2));
+    assert.ok(naive > 10 * withRf, "ignoring RF should overstate it badly: " + naive.toFixed(1));
+    console.log("ok trajectory follows RF: RARE winds " + withRf.toFixed(2) +
+        " turns, " + naive.toFixed(1) + " if the RF pulses are ignored");
+})();
+
+(function testCartesianTrajectoryHitsTheTextbookGrid() {
+    // The three Cartesian examples are 16x16 over a 1 m field of view, so every ADC
+    // sample has to land on a 1 1/m grid, half a step off centre because Pulseq samples
+    // at the middle of each dwell: kx sweeps -7.5 .. 7.5 and ky steps in whole units.
+    // Nothing about the k-space calculation is free to be wrong and still pass this.
+    ["web5_EPI_16.seq", "web3_FLASH_16.seq", "web4_RARE_16.seq"].forEach(function (file) {
+        var seq = Pulseq.parse(readSeq(file));
+        var wf = seq.rasterize(seq.suggestedRaster());
+        var k = Pulseq.calculateKspace(wf);
+        assert.strictEqual(k.tAdc.length, 16 * 16, file + " should hold 16 x 16 samples");
+
+        var kxSeen = {};
+        var kySeen = {};
+        for (var i = 0; i < k.tAdc.length; i++) {
+            var kx = k.kxAdc[i];
+            var ky = k.kyAdc[i];
+            almost(kx, Math.round(kx - 0.5) + 0.5, 0.02, file + " kx on the half-integer grid");
+            almost(ky, Math.round(ky), 0.02, file + " ky on the integer grid");
+            kxSeen[Math.round(kx - 0.5) + 0.5] = true;
+            kySeen[Math.round(ky)] = true;
+        }
+        assert.strictEqual(Object.keys(kxSeen).length, 16, file + " distinct readout positions");
+        assert.strictEqual(Object.keys(kySeen).length, 16, file + " distinct phase encodes");
+        almost(k.radiusMaxAdc, Math.hypot(7.5, 8), 0.03, file + " corner of k-space");
+        console.log("ok Cartesian k-space " + file + ": 16 x 16 samples, corner at " +
+            k.radiusMaxAdc.toFixed(2) + " 1/m");
+    });
+})();
+
+(function testGradientDisplayFactor() {
+    // Normalized display puts the same winding across the sample whatever field of view
+    // and matrix a sequence was written for, so every example is comparable: the target is
+    // five turns across the sample, held below what the isochromat grid can resolve.
+    var PLANE_WIDTH = 8;     // scene units, from scenes.Plane in index.html
+    var PLANE_SPACING = 0.4;
+    var targetK = Pulseq.displayTargetK(PLANE_WIDTH, PLANE_SPACING);
+    almost(targetK, 5 / (PLANE_WIDTH * 0.015), 1e-9, "five turns across the Plane sample");
+    assert.ok(targetK < Pulseq.isocNyquistK(PLANE_SPACING),
+        "the target has to stay under the grid's Nyquist limit");
+
+    // A grid too coarse for five turns is capped by what it can actually resolve.
+    almost(Pulseq.displayTargetK(PLANE_WIDTH, 2), Pulseq.isocNyquistK(2), 1e-9,
+        "a coarse grid caps the target");
+    assert.strictEqual(Pulseq.displayTargetK(0, PLANE_SPACING), 0, "no sample, no target");
+
+    ["web5_EPI_16.seq", "web3_FLASH_16.seq", "web4_RARE_16.seq", "spiral_tse_ss.seq"]
+        .forEach(function (file) {
+            var seq = Pulseq.parse(readSeq(file));
+            var wf = seq.rasterize(seq.suggestedRaster());
+            var k = Pulseq.calculateKspace(wf);
+            var factor = Pulseq.gradientDisplayFactor(wf, targetK);
+            assert.ok(k.radiusMaxAdc > 0, file + " should acquire some k-space");
+            almost(k.radiusMaxAdc * factor, targetK, targetK * 1e-9,
+                file + " scaled ADC k-space should land on the target");
+            almost(k.radiusMaxAdc * factor * PLANE_WIDTH * 0.015, 5, 1e-9,
+                file + " should wind five turns across the sample");
+            console.log("ok gradient scale " + file + ": ADC reaches " +
+                k.radiusMaxAdc.toFixed(1) + " 1/m, scaled to " + targetK.toFixed(1) +
+                " by ×" + factor.toPrecision(3));
+        });
+
+    // With no target the gradients play at their physical strength.
+    var epi = Pulseq.parse(readSeq("web5_EPI_16.seq"));
+    var epiWf = epi.rasterize(epi.suggestedRaster());
+    assert.strictEqual(Pulseq.gradientDisplayFactor(epiWf, 0), 1, "EPI stays unscaled");
 })();
 
 (function testEnvelopeDecimationKeepsFastOscillations() {
@@ -376,43 +456,23 @@ function replay(wf, fps, stretch, gradScale) {
         worst.toFixed(3), "of 2");
 })();
 
-(function testUnderSampledGradientDetectionAndSmoothing() {
-    // The spiral file's gradients turn over every few raster steps, so its k-space
-    // trajectory zig-zags instead of tracing a path. Detect it, and smooth it in a way
-    // that keeps the trajectory the spins follow.
-    var seq = Pulseq.parse(readSeq("spiral_tse_ss.seq"));
-    var wf = seq.rasterize(seq.suggestedRaster());
-    var sampling = Pulseq.gradientSampling(wf, seq.rasters.grad);
-    assert.ok(sampling.undersampled, "spiral should be flagged, rasters=" + sampling.rasters);
-    assert.ok(sampling.rasters < 5, "oscillates every " + sampling.rasters.toFixed(2) + " rasters");
-
-    var before = Pulseq.peakGradientTurns(wf);
-    var peakBefore = 0;
-    for (var i = 0; i < wf.n; i++) peakBefore = Math.max(peakBefore, Math.abs(wf.gx[i]));
-
-    Pulseq.smoothGradients(wf, sampling.period * Pulseq.UNDERSAMPLED_SMOOTH_WINDOWS,
-        Pulseq.UNDERSAMPLED_SMOOTH_PASSES);
-
-    var after = Pulseq.peakGradientTurns(wf);
-    var peakAfter = 0;
-    for (var j = 0; j < wf.n; j++) peakAfter = Math.max(peakAfter, Math.abs(wf.gx[j]));
-
-    // Averaging is a convolution, so the k-space excursion survives...
-    almost(after, before, before * 0.02, "smoothing must preserve k-space");
-    // ...while the unrepresentable swing that threw the spins about does not.
-    assert.ok(peakAfter < peakBefore * 0.5,
-        "peak |Gx| " + peakBefore.toExponential(2) + " -> " + peakAfter.toExponential(2));
-    console.log("ok under-sampled gradients: every " + sampling.rasters.toFixed(2) +
-        " raster steps; peak |Gx| " + peakBefore.toExponential(2) + " -> " +
-        peakAfter.toExponential(2) + ", k-space " + before.toFixed(1) + " -> " + after.toFixed(1) +
-        " turns");
-
-    // Properly sampled sequences must not be touched.
-    ["web5_EPI_16.seq", "web3_FLASH_16.seq", "web4_RARE_16.seq"].forEach(function (file) {
-        var s = Pulseq.parse(readSeq(file));
-        var w = s.rasterize(s.suggestedRaster());
-        var samp = Pulseq.gradientSampling(w, s.rasters.grad);
-        assert.ok(!samp.undersampled, file + " should not be flagged, rasters=" + samp.rasters);
+(function testExampleGradientsStayPhysical() {
+    // A .seq whose gradients exceed what a scanner can play is broken, not merely hard
+    // to display: the spiral example had to be regenerated because its trajectory had
+    // diverged to 2331 mT/m, twenty times past the limit its own generator declared.
+    var HZ_PER_M_PER_MT_PER_M = 42.577e3; // 1 mT/m at gamma = 42.577 MHz/T
+    var files = ["web3_FLASH_16.seq", "web4_RARE_16.seq", "web5_EPI_16.seq",
+        "spiral_tse_ss.seq"];
+    files.forEach(function (file) {
+        var seq = Pulseq.parse(readSeq(file));
+        var wf = seq.rasterize(seq.suggestedRaster());
+        var peak = 0;
+        for (var i = 0; i < wf.n; i++) {
+            peak = Math.max(peak, Math.hypot(wf.gx[i], wf.gy[i], wf.gz[i]));
+        }
+        var mTm = peak / HZ_PER_M_PER_MT_PER_M;
+        assert.ok(mTm < 80, file + " peak |G| " + mTm.toFixed(1) + " mT/m is not playable");
+        console.log("ok physical gradients " + file + ": peak |G| " + mTm.toFixed(1) + " mT/m");
     });
 })();
 
@@ -458,7 +518,7 @@ function replay(wf, fps, stretch, gradScale) {
     var sum = seq.summary();
     assert.strictEqual(sum.version, "1.4.2");
     // Matches the TotalDuration the file declares, with the 0.5 s tail block removed.
-    almost(sum.duration, 0.21774, 1e-9, "spiral TSE duration");
+    almost(sum.duration, 0.10973, 1e-9, "spiral TSE duration");
     assert.strictEqual(sum.nRf, 5);
     almost(sum.flips[0], 90, 0.5, "excitation");
     for (var i = 1; i < sum.flips.length; i++) almost(sum.flips[i], 180, 0.5, "refocus " + i);
@@ -486,9 +546,40 @@ function replay(wf, fps, stretch, gradScale) {
     almost(peakRf, 987.454, 1, "peak RF should match the [RF] amplitude");
     assert.ok(maxGx > 1e6 && maxGy > 1e6, "spiral gradients " + maxGx + " " + maxGy);
     assert.ok(both > 1000, "a spiral runs Gx and Gy together, samples: " + both);
+
+    // The first readout has to trace a spiral out of the centre. A diverged trajectory
+    // still accumulates some k-space, so the telling difference is that it reverses every
+    // few raster steps and its radius wanders instead of growing.
+    var gx = seq.gradients[8], gy = seq.gradients[9];
+    var sx = seq.shapes[gx.shape_id].samples, sy = seq.shapes[gy.shape_id].samples;
+    var kx = 0, ky = 0, radius = 0, turns = 0, prevAngle = 0, reversals = 0, shrank = 0;
+    for (var s = 0; s < sx.length; s++) {
+        kx += gx.amp * sx[s] * seq.rasters.grad;
+        ky += gy.amp * sy[s] * seq.rasters.grad;
+        var r = Math.hypot(kx, ky);
+        if (r < radius) shrank++;
+        radius = Math.max(radius, r);
+        var angle = Math.atan2(ky, kx);
+        var step = angle - prevAngle;
+        while (step > Math.PI) step -= 2 * Math.PI;
+        while (step < -Math.PI) step += 2 * Math.PI;
+        turns += step;
+        prevAngle = angle;
+        if (s > 0 && sx[s] * sx[s - 1] < 0) reversals++;
+    }
+    turns = Math.abs(turns) / (2 * Math.PI);
+    assert.ok(sx.length / Math.max(1, reversals) > 10,
+        "readout gradient reverses every " + (sx.length / reversals).toFixed(1) +
+        " raster steps, so it is not a trajectory");
+    assert.ok(turns > 10, "first readout should wind out over many turns, got " + turns.toFixed(1));
+    assert.ok(shrank < sx.length * 0.1,
+        "a spiral-out radius should grow, it shrank on " + shrank + " of " + sx.length + " steps");
     console.log("ok spiral TSE:", sum.nBlocks, "blocks,", (sum.duration * 1000).toFixed(1),
         "ms, flips", sum.flips.join("/"), ", time-shaped gradients", timeShaped.join(","),
         ", oblique samples", both);
+    console.log("ok spiral trajectory: first readout winds " + turns.toFixed(1) +
+        " turns out to " + radius.toFixed(0) + " 1/m, reversing every " +
+        (sx.length / reversals).toFixed(0) + " raster steps");
 })();
 
 console.log("All pulseq tests passed.");

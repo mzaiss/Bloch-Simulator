@@ -2605,6 +2605,10 @@ happens in spare time, bug reports and software suggestions may largely be ignor
       <label class="pulseq-repeat">
         <input id="pulseqRepeat" type="checkbox"> repeat
       </label>
+      <label class="pulseq-repeat"
+             title="Scale gradients so the outermost acquired k-space sample winds five turns across the sample, whatever field of view and matrix the sequence was written for. Off plays them at physical strength.">
+        <input id="pulseqNormalize" type="checkbox" checked> normalized gradients
+      </label>
     </div>
     <div id="pulseqStatus">Load a .seq file or pick an example, then Play.</div>
     <div id="pulseqPlot"></div>

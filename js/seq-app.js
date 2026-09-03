@@ -42,7 +42,7 @@ var loaded = {
     summary: null,
     hasGradients: false,
     gradFactor: 1,
-    sampling: null
+    targetK: 0
 };
 var player = {
     playing: false,
@@ -81,6 +81,63 @@ function maxIsocRadius(state) {
     return max;
 }
 
+/**
+ * Spacing of the closest pair of isochromats, in scene units — the sample's resolution,
+ * and so what sets the finest stripe pattern a gradient can write into it. Taken from the
+ * positions rather than the scene name, since the scenes differ (Plane and Line step by
+ * 0.4, LineDense by 0.2) and a non-uniform sample has gaps wider than its spacing.
+ */
+function isocSpacing(state) {
+    var arr = (state && state.IsocArr) || [];
+    var min = Infinity;
+    for (var i = 0; i < arr.length; i++) {
+        var a = arr[i].pos;
+        if (!a) continue;
+        for (var j = i + 1; j < arr.length; j++) {
+            var b = arr[j].pos;
+            if (!b) continue;
+            var d = Math.sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
+            if (d > 1e-9 && d < min) min = d;
+        }
+    }
+    return isFinite(min) ? min : 0;
+}
+
+/** Width of the isochromat cloud, in scene units, along whichever axis it spans most. */
+function isocWidth(state) {
+    var arr = (state && state.IsocArr) || [];
+    var lo = { x: Infinity, y: Infinity };
+    var hi = { x: -Infinity, y: -Infinity };
+    for (var i = 0; i < arr.length; i++) {
+        var p = arr[i].pos;
+        if (!p) continue;
+        lo.x = Math.min(lo.x, p.x);
+        hi.x = Math.max(hi.x, p.x);
+        lo.y = Math.min(lo.y, p.y);
+        hi.y = Math.max(hi.y, p.y);
+    }
+    var w = Math.max(hi.x - lo.x, hi.y - lo.y);
+    return isFinite(w) && w > 0 ? w : 0;
+}
+
+/**
+ * Gradient scaling for the current sample. Normalized scales the sequence's outermost ADC
+ * sample to the same winding across the sample whatever field of view and matrix it was
+ * written for, so the examples are comparable to each other and to the sample we have.
+ * Unnormalized plays the gradients at their physical strength.
+ */
+function updateGradFactor() {
+    if (!loaded.waveforms) return;
+    var el = $("pulseqNormalize");
+    var normalize = !el || el.checked;
+    var state = window.BlochSimBridge && window.BlochSimBridge.getState
+        ? window.BlochSimBridge.getState() : null;
+    loaded.targetK = normalize
+        ? Pulseq.displayTargetK(isocWidth(state), isocSpacing(state))
+        : 0;
+    loaded.gradFactor = Pulseq.gradientDisplayFactor(loaded.waveforms, loaded.targetK);
+}
+
 function $(id) { return document.getElementById(id); }
 
 function setStatus(text, isError) {
@@ -93,17 +150,17 @@ function setStatus(text, isError) {
 function formatSummary(sum) {
     var flips = sum.flips.slice(0, 8).map(function (f) { return f + "°"; }).join(", ");
     if (sum.flips.length > 8) flips += ", …";
-    var scaled = loaded.gradFactor < 1
-        ? "  ·  gradients ×" + loaded.gradFactor.toPrecision(2) + " to keep dephasing readable"
-        : "";
-    var undersampled = loaded.sampling && loaded.sampling.undersampled
-        ? "  ·  gradient waveform under-sampled in the file (turns over every " +
-            loaded.sampling.rasters.toFixed(1) + " raster steps), smoothed to keep k-space"
+    // A sequence with no gradients under its ADC has no k-space to normalize, and keeps
+    // the factor of 1 that would make the note a claim about nothing.
+    var scaled = Math.abs(loaded.gradFactor - 1) > 0.005
+        ? "  ·  gradients ×" + loaded.gradFactor.toPrecision(2) +
+            " so the outermost ADC sample reaches " + loaded.targetK.toPrecision(3) +
+            " 1/m across the sample"
         : "";
     return sum.name + "  v" + sum.version +
         "  ·  " + sum.nBlocks + " blocks  ·  " + sum.nRf + " RF  ·  " + sum.nAdc + " ADC  ·  " +
         (sum.duration * 1000).toFixed(1) + " ms" +
-        (flips ? "  ·  flips " + flips : "") + scaled + undersampled;
+        (flips ? "  ·  flips " + flips : "") + scaled;
 }
 
 function sliderToSpeed(pos) {
@@ -139,16 +196,7 @@ async function loadSeqText(text, name) {
     for (var i = 0; i < waveforms.n && !loaded.hasGradients; i++) {
         if (Math.abs(waveforms.gx[i]) > 1 || Math.abs(waveforms.gy[i]) > 1) loaded.hasGradients = true;
     }
-    // A waveform written below its own Nyquist zig-zags rather than tracing a path, which
-    // reads as noise in the plot and throws the spins about. Averaging over one
-    // oscillation keeps the k-space trajectory and drops what the raster could not hold.
-    loaded.sampling = Pulseq.gradientSampling(waveforms, seq.rasters.grad);
-    if (loaded.sampling.undersampled) {
-        Pulseq.smoothGradients(waveforms,
-            loaded.sampling.period * Pulseq.UNDERSAMPLED_SMOOTH_WINDOWS,
-            Pulseq.UNDERSAMPLED_SMOOTH_PASSES);
-    }
-    loaded.gradFactor = Pulseq.gradientDisplayFactor(waveforms);
+    updateGradFactor();
     player.stretch = autoStretch(waveforms.duration);
     setStatus(formatSummary(summary));
     $("pulseqPlay").disabled = false;
@@ -199,6 +247,9 @@ function startPlayback() {
     player.guiAge = 0;
     player.rfOnThreshold = peakRf(loaded.waveforms) * RF_ON_FRACTION;
     player.maxRadius = maxIsocRadius(bridge && bridge.getState ? bridge.getState() : null);
+    // The scene may have changed since the file was loaded, and the normalization is
+    // relative to whatever sample is now in the view.
+    updateGradFactor();
     player.playing = true;
     $("pulseqPlay").textContent = "Stop";
     // Gradients act through position, so they do nothing to a sample sitting at the origin.
@@ -351,6 +402,11 @@ function bindUi() {
     speedSlider.addEventListener("input", function () {
         player.speed = sliderToSpeed(parseFloat(this.value));
         $("pulseqSpeedLabel").textContent = formatSpeed(player.speed);
+    });
+
+    $("pulseqNormalize").addEventListener("change", function () {
+        updateGradFactor();
+        if (loaded.summary) setStatus(formatSummary(loaded.summary));
     });
 
     $("pulseqToggle").addEventListener("click", function () {

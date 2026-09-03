@@ -27,13 +27,22 @@
     var METRES_PER_SCENE_UNIT = 0.015;
     /** Half-width of the Plane sample, in scene units. */
     var PLANE_EDGE_UNITS = 4;
-    /** Winding across that half-width that still reads as stripes rather than noise. */
-    var TARGET_GRAD_TURNS = 2;
-    /** Below this many raster steps per oscillation a gradient waveform is under-sampled. */
-    var MIN_GRAD_RASTERS_PER_OSCILLATION = 8;
-    /** Smoothing applied to such a waveform: window multiple of the oscillation, passes. */
-    var UNDERSAMPLED_SMOOTH_WINDOWS = 2;
-    var UNDERSAMPLED_SMOOTH_PASSES = 3;
+    /**
+     * Winding, in turns across the sample, that the outermost acquired k-space sample is
+     * scaled to. Every sequence is held to the same figure, so a 16x16 Cartesian readout
+     * over a 1 m field of view and a 120x120 spiral over 24 cm wind alike on screen
+     * instead of differing by the 50x their gradients differ by. Half of what the 0.4-unit
+     * isochromat grid can resolve, which leaves the stripes reading as stripes rather than
+     * folding into moire.
+     */
+    var DISPLAY_TARGET_TURNS = 5;
+    /**
+     * A .seq file below v1.5 does not record what an RF pulse is for, so the k-space
+     * calculation has to infer it. Pulses up to this flip angle count as excitation and
+     * larger ones as refocusing, which is the rule pypulseq's read(detect_rf_use=True)
+     * applies; the 0.01 covers a nominal 90 that rounds up through the shape quantization.
+     */
+    var EXCITATION_MAX_FLIP_DEG = 90.01;
 
     function parseVersionNumber(lines) {
         var major = 0, minor = 0, revision = 0;
@@ -403,6 +412,74 @@
         return rf.amp * Math.sqrt(re * re + im * im) * 360;
     };
 
+    /**
+     * When the rotation an RF pulse performs effectively happens, in seconds from the
+     * start of the event, excluding its delay: the peak of the envelope, or the middle of
+     * the plateau for a block pulse. Port of pypulseq's calc_rf_center.
+     */
+    Sequence.prototype.rfCenterS = function (rf) {
+        if (!rf) return 0;
+        var mag = shapeSamples(this.shapes, rf.mag_id);
+        if (!mag.length) return 0;
+        var times = shapeTimes(this.shapes, rf.time_id, this.rasters.rf);
+        var peak = 0;
+        var i;
+        for (i = 0; i < mag.length; i++) peak = Math.max(peak, Math.abs(mag[i]));
+        var first = -1;
+        var last = -1;
+        for (i = 0; i < mag.length; i++) {
+            if (Math.abs(mag[i]) >= peak * 0.99999) {
+                if (first < 0) first = i;
+                last = i;
+            }
+        }
+        if (first < 0) return 0;
+        if (times) return (times[first] + times[last]) / 2;
+        return (first + last + 1) / 2 * this.rasters.rf;
+    };
+
+    /**
+     * Absolute times of the RF pulses, split by what they do to the k-space trajectory.
+     * Port of pypulseq's Sequence.rf_times, with the use inferred as described at
+     * EXCITATION_MAX_FLIP_DEG because the file format does not carry it.
+     */
+    Sequence.prototype.rfTimes = function () {
+        var excitations = [];
+        var refocusings = [];
+        var t = 0;
+        for (var i = 0; i < this.blocks.length; i++) {
+            var b = this.blocks[i];
+            var rf = b.rf ? this.rf[b.rf] : null;
+            if (rf) {
+                var centre = t + (rf.delay || 0) * 1e-6 + this.rfCenterS(rf);
+                if (Math.abs(this.rfFlipDeg(rf)) < EXCITATION_MAX_FLIP_DEG) excitations.push(centre);
+                else refocusings.push(centre);
+            }
+            t += this.blockDurationUs(b) * 1e-6;
+        }
+        return { excitations: excitations, refocusings: refocusings };
+    };
+
+    /**
+     * Absolute time of every ADC sample. Pulseq puts sample i at the centre of its dwell,
+     * so the first one sits half a dwell after the ADC delay.
+     */
+    Sequence.prototype.adcTimes = function () {
+        var out = [];
+        var t = 0;
+        for (var i = 0; i < this.blocks.length; i++) {
+            var b = this.blocks[i];
+            var adc = b.adc ? this.adc[b.adc] : null;
+            if (adc) {
+                var t0 = t + (adc.delay || 0) * 1e-6;
+                var dwell = adc.dwell * 1e-9;
+                for (var s = 0; s < adc.num; s++) out.push(t0 + (s + 0.5) * dwell);
+            }
+            t += this.blockDurationUs(b) * 1e-6;
+        }
+        return out;
+    };
+
     Sequence.prototype.summary = function () {
         var durationUs = 0;
         var nRf = 0, nAdc = 0, flips = [];
@@ -492,6 +569,9 @@
         var gz = new Float64Array(n);
         var adc = new Float64Array(n);
 
+        var rfTimes = this.rfTimes();
+        var adcSampleTimes = this.adcTimes();
+
         var bIdx = 0;
         for (var k = 0; k < n; k++) {
             var tk = k * dt;
@@ -524,7 +604,10 @@
             gx: gx,
             gy: gy,
             gz: gz,
-            adc: adc
+            adc: adc,
+            excitationTimes: rfTimes.excitations,
+            refocusTimes: rfTimes.refocusings,
+            adcSampleTimes: adcSampleTimes
         });
     };
 
@@ -599,90 +682,133 @@
     }
 
     /**
-     * Period of the fastest gradient oscillation actually present, in seconds, estimated
-     * from sign changes over the span where gradients are active.
+     * The k-space trajectory the gradients trace, in 1/m. Port of pypulseq's
+     * Sequence.calculate_kspace: k is the running gradient moment plus an offset that is
+     * constant between RF pulses, where an excitation restarts the trajectory at the
+     * origin because it makes fresh transverse magnetization, and a refocusing pulse
+     * mirrors it through the origin because it inverts the phase accrued so far
+     * (dk = -2M - dk, pypulseq's own recursion). Both matter: a plain running integral
+     * from t=0 reads the RARE example at 79 turns of winding where a spin carries 2.4.
+     *
+     * Reports the trajectory at the ADC sample points, which is the k-space the sequence
+     * actually acquires and so the part that has to fit the sample for the readout to
+     * mean anything, alongside the largest radius reached at any time.
      */
-    function gradientOscillationPeriod(wf) {
-        var changes = 0;
-        var first = -1;
-        var last = -1;
-        for (var i = 0; i < wf.n; i++) {
-            var g = Math.abs(wf.gx[i]) + Math.abs(wf.gy[i]) + Math.abs(wf.gz[i]);
-            if (g > 1e-9) {
-                if (first < 0) first = i;
-                last = i;
-            }
-            if (i > 0 && wf.gx[i] * wf.gx[i - 1] < 0) changes++;
-        }
-        if (first < 0 || changes === 0) return Infinity;
-        return 2 * (last - first + 1) * wf.dt / changes;
-    }
+    function calculateKspace(wf) {
+        var events = [];
+        var exc = wf.excitationTimes || [];
+        var ref = wf.refocusTimes || [];
+        var i;
+        for (i = 0; i < exc.length; i++) events.push({ t: exc[i], excite: true });
+        for (i = 0; i < ref.length; i++) events.push({ t: ref[i], excite: false });
+        events.sort(function (a, b) { return a.t - b.t; });
 
-    /**
-     * A gradient cannot physically turn over in a couple of raster steps, so a waveform
-     * that does was written below its own Nyquist: its k-space trajectory zig-zags instead
-     * of tracing a path. Reported so the panel can say so rather than looking broken.
-     */
-    function gradientSampling(wf, gradRaster) {
-        var period = gradientOscillationPeriod(wf);
-        var rasters = period / (gradRaster || GRAD_RASTER);
+        var nEvents = events.length;
+        var dkx = new Float64Array(nEvents + 1);
+        var dky = new Float64Array(nEvents + 1);
+        var dkz = new Float64Array(nEvents + 1);
+        for (i = 0; i < nEvents; i++) {
+            var te = events[i].t;
+            var mx = integralAt(wf, "gx", te);
+            var my = integralAt(wf, "gy", te);
+            var mz = integralAt(wf, "gz", te);
+            if (events[i].excite) {
+                dkx[i + 1] = -mx;
+                dky[i + 1] = -my;
+                dkz[i + 1] = -mz;
+            } else {
+                dkx[i + 1] = -2 * mx - dkx[i];
+                dky[i + 1] = -2 * my - dky[i];
+                dkz[i + 1] = -2 * mz - dkz[i];
+            }
+        }
+
+        // Trajectory at the ADC samples, in acquisition order.
+        var tAdc = wf.adcSampleTimes || [];
+        var nAdc = tAdc.length;
+        var kxAdc = new Float64Array(nAdc);
+        var kyAdc = new Float64Array(nAdc);
+        var kzAdc = new Float64Array(nAdc);
+        var radiusMaxAdc = 0;
+        var p = 0;
+        for (i = 0; i < nAdc; i++) {
+            var t = tAdc[i];
+            while (p < nEvents && t >= events[p].t) p++;
+            kxAdc[i] = integralAt(wf, "gx", t) + dkx[p];
+            kyAdc[i] = integralAt(wf, "gy", t) + dky[p];
+            kzAdc[i] = integralAt(wf, "gz", t) + dkz[p];
+            var rAdc = Math.sqrt(kxAdc[i] * kxAdc[i] + kyAdc[i] * kyAdc[i]);
+            if (rAdc > radiusMaxAdc) radiusMaxAdc = rAdc;
+        }
+
+        // Largest in-plane radius over the whole trajectory, on the playback raster. The
+        // cumulative integrals already hold the running moment at every raster point.
+        var radiusMaxTraj = 0;
+        var cx = wf.cum.gx;
+        var cy = wf.cum.gy;
+        p = 0;
+        for (i = 0; i < wf.n; i++) {
+            var tr = i * wf.dt;
+            while (p < nEvents && tr >= events[p].t) p++;
+            var kx = cx[i] + dkx[p];
+            var ky = cy[i] + dky[p];
+            var r = Math.sqrt(kx * kx + ky * ky);
+            if (r > radiusMaxTraj) radiusMaxTraj = r;
+        }
+
         return {
-            period: period,
-            rasters: rasters,
-            undersampled: rasters < MIN_GRAD_RASTERS_PER_OSCILLATION
+            excitations: exc,
+            refocusings: ref,
+            tAdc: tAdc,
+            kxAdc: kxAdc,
+            kyAdc: kyAdc,
+            kzAdc: kzAdc,
+            radiusMaxAdc: radiusMaxAdc,
+            radiusMaxTraj: radiusMaxTraj
         };
-    }
-
-    /**
-     * Box-car smooth the gradient channels over `windowS` seconds, repeated `passes`
-     * times. Averaging is a convolution, so the gradient moment — the k-space trajectory
-     * the spins actually follow — is preserved; what goes away is the ripple that the
-     * file's raster could not represent and that otherwise makes the spins jitter.
-     */
-    function smoothGradients(wf, windowS, passes) {
-        var half = Math.max(1, Math.round(windowS / wf.dt / 2));
-        var n = wf.n;
-        var prefix = new Float64Array(n + 1);
-        var channels = ["gx", "gy", "gz"];
-        for (var c = 0; c < channels.length; c++) {
-            var y = wf[channels[c]];
-            for (var p = 0; p < (passes || 1); p++) {
-                prefix[0] = 0;
-                for (var i = 0; i < n; i++) prefix[i + 1] = prefix[i] + y[i];
-                for (var j = 0; j < n; j++) {
-                    var a = j - half > 0 ? j - half : 0;
-                    var b = j + half + 1 < n ? j + half + 1 : n;
-                    y[j] = (prefix[b] - prefix[a]) / (b - a);
-                }
-            }
-        }
-        return buildIntegrals(wf);
     }
 
     /** Largest phase winding, in turns, the sequence puts across the edge of the sample. */
     function peakGradientTurns(wf) {
-        var kx = 0;
-        var ky = 0;
-        var peak = 0;
-        for (var i = 1; i < wf.n; i++) {
-            kx += 0.5 * (wf.gx[i - 1] + wf.gx[i]) * wf.dt;
-            ky += 0.5 * (wf.gy[i - 1] + wf.gy[i]) * wf.dt;
-            var r = Math.sqrt(kx * kx + ky * ky);
-            if (r > peak) peak = r;
-        }
-        return peak * PLANE_EDGE_UNITS * METRES_PER_SCENE_UNIT;
+        return calculateKspace(wf).radiusMaxTraj * PLANE_EDGE_UNITS * METRES_PER_SCENE_UNIT;
     }
 
     /**
-     * Factor applied to gradients for display. The sample is only ~20 isochromats across,
-     * so a sequence whose k-space excursion winds far more than a couple of turns over it
-     * shows nothing but aliasing — and no playback speed helps, since the total phase is
-     * what is large. Sequences under the target keep the plain physical scale, so their
-     * dephasing stays comparable with each other.
+     * Highest spatial frequency an isochromat grid of the given spacing can carry, in 1/m.
+     * Neighbours a distance apart cannot show more than half a turn between them, so this
+     * is the sample's own Nyquist limit: past it the stripe pattern folds back and no
+     * playback speed recovers it.
      */
-    function gradientDisplayFactor(wf) {
-        var turns = peakGradientTurns(wf);
-        return turns > TARGET_GRAD_TURNS ? TARGET_GRAD_TURNS / turns : 1;
+    function isocNyquistK(spacingSceneUnits) {
+        if (!(spacingSceneUnits > 0)) return Infinity;
+        return 1 / (2 * spacingSceneUnits * METRES_PER_SCENE_UNIT);
+    }
+
+    /**
+     * The k-space radius the display aims the readout at: the radius that winds
+     * DISPLAY_TARGET_TURNS across a sample of the given width, or the grid's own Nyquist
+     * limit where that is lower, since no gradient scale recovers a pattern the
+     * isochromats cannot resolve.
+     */
+    function displayTargetK(widthSceneUnits, spacingSceneUnits, turns) {
+        if (!(widthSceneUnits > 0)) return 0;
+        if (!(turns > 0)) turns = DISPLAY_TARGET_TURNS;
+        return Math.min(turns / (widthSceneUnits * METRES_PER_SCENE_UNIT),
+            isocNyquistK(spacingSceneUnits));
+    }
+
+    /**
+     * Factor applied to gradients for display, mapping the outermost k-space sample the
+     * sequence acquires onto `targetK`. It scales both ways on purpose: what a sequence
+     * asks of its gradients follows from the field of view and matrix it was written for,
+     * neither of which our sample has, so a readout is amplified or damped until it winds
+     * the intended amount across the isochromats we do have. Returns 1 with no target,
+     * which plays the gradients at their physical strength.
+     */
+    function gradientDisplayFactor(wf, targetK) {
+        if (!(targetK > 0) || !isFinite(targetK)) return 1;
+        var reached = calculateKspace(wf).radiusMaxAdc;
+        return reached > 0 ? targetK / reached : 1;
     }
 
     /**
@@ -735,11 +861,10 @@
         rfToEdu: rfToEdu,
         gradToEdu: gradToEdu,
         peakGradientTurns: peakGradientTurns,
+        calculateKspace: calculateKspace,
+        isocNyquistK: isocNyquistK,
+        displayTargetK: displayTargetK,
         gradientDisplayFactor: gradientDisplayFactor,
-        gradientSampling: gradientSampling,
-        smoothGradients: smoothGradients,
-        UNDERSAMPLED_SMOOTH_WINDOWS: UNDERSAMPLED_SMOOTH_WINDOWS,
-        UNDERSAMPLED_SMOOTH_PASSES: UNDERSAMPLED_SMOOTH_PASSES,
         envelopeSeries: envelopeSeries,
         decompressShape: decompressShape
     };
