@@ -2414,7 +2414,12 @@ happens in spare time, bug reports and software suggestions may largely be ignor
       -webkit-user-select: text;
       box-shadow: 0 8px 24px rgba(0,0,0,0.35);
       }
+      /* Collapsed it shrinks to just its label, so anchored to the right edge it leaves
+      the view clear rather than sitting there 380px wide with nothing in it. */
+      #pulseqPanel.collapsed { width: auto; }
       #pulseqPanel.collapsed .pulseq-body { display: none; }
+      #pulseqPanel.collapsed #pulseqMeta { display: none; }
+      #pulseqPanel.collapsed #pulseqHead { border-radius: 6px; }
       #pulseqHead {
       display: flex;
       align-items: center;
@@ -2598,8 +2603,8 @@ happens in spare time, bug reports and software suggestions may largely be ignor
       </label>
       <button id="pulseqPlay" type="button" disabled>Play</button>
       <label class="pulseq-speed">speed
-        <input id="pulseqSpeed" type="range" min="0" max="1000" step="1" value="794"
-               title="playback speed (logarithmic)">
+        <input id="pulseqSpeed" type="range" min="0" max="1000" step="1" value="675"
+               title="playback speed (logarithmic, 0.002× to 20×)">
         <span id="pulseqSpeedLabel">1×</span>
       </label>
       <label class="pulseq-repeat">

@@ -164,9 +164,10 @@ function replay(wf, fps, stretch, gradScale) {
     almost(lowFps.kx, base.kx, Math.abs(base.kx) * 0.01 + 1e-6,
         "gradient winding must not depend on frame rate");
 
-    // The speed slider spans 0.05x to 5x, a 100x range of stretch.
-    var quick = replay(wf, 60, stretch / 5, gradScale);
-    var crawl = replay(wf, 60, stretch / 0.05, gradScale);
+    // Across the full span of the speed slider, 0.002x to 20x. The fast end is the hard
+    // one: a frame covers 20 ms of sequence there, several times a whole RF pulse.
+    var quick = replay(wf, 60, stretch / 20, gradScale);
+    var crawl = replay(wf, 60, stretch / 0.002, gradScale);
     almost(quick.flip, base.flip, 2, "flip must not depend on playback speed");
     almost(crawl.flip, base.flip, 1, "flip must not depend on playback speed");
     almost(quick.kx, base.kx, Math.abs(base.kx) * 0.02 + 1e-6,
@@ -179,7 +180,7 @@ function replay(wf, fps, stretch, gradScale) {
     var lobe = Pulseq.gradToEdu(4000, stretch, gradScale) * 4 / gradScale * (0.0045 * stretch);
     assert.ok(lobe > 3 && lobe < 12, "EPI readout winding at plane edge: " + lobe.toFixed(2) + " rad");
     console.log("ok integration: EPI flip", base.flip.toFixed(1), "deg at 60fps,",
-        lowFps.flip.toFixed(1), "at 12fps,", quick.flip.toFixed(1), "at 5x speed; readout winding",
+        lowFps.flip.toFixed(1), "at 12fps,", quick.flip.toFixed(1), "at 20x speed; readout winding",
         lobe.toFixed(2), "rad");
 })();
 

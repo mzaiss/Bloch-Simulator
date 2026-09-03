@@ -31,7 +31,7 @@ const SUBSTEP_LIMIT = 128;
 const RF_ON_FRACTION = 1e-3;
 /** Speed slider: logarithmic, so the slow end where gradients are readable is usable. */
 const SPEED_MIN = 0.002;
-const SPEED_MAX = 5;
+const SPEED_MAX = 20;
 const SPEED_SLIDER_STEPS = 1000;
 
 var plotHost = {};
@@ -415,8 +415,13 @@ function bindUi() {
         if (loaded.summary) setStatus(formatSummary(loaded.summary));
     });
 
-    $("pulseqToggle").addEventListener("click", function () {
-        $("pulseqPanel").classList.toggle("collapsed");
+    // The whole header is the target, which is what its pointer cursor has always implied
+    // and what makes the narrow collapsed strip easy to get back.
+    $("pulseqHead").addEventListener("click", function () {
+        var collapsed = $("pulseqPanel").classList.toggle("collapsed");
+        var toggle = $("pulseqToggle");
+        toggle.textContent = collapsed ? "▸" : "▾";
+        toggle.title = collapsed ? "Expand" : "Collapse";
     });
 }
 
