@@ -198,7 +198,13 @@ async function loadSeqText(text, name) {
     }
     updateGradFactor();
     player.stretch = autoStretch(waveforms.duration);
-    setStatus(formatSummary(summary));
+    // Every format revision so far has inserted columns into the event tables, so a file
+    // newer than the parser reads as plausible nonsense unless it is called out.
+    var warning = seq.version.newerThanParser
+        ? "Pulseq v" + summary.version + " is newer than this parser, which reads up to" +
+            " v1.5 — RF and gradient events may be misread.  ·  "
+        : "";
+    setStatus(warning + formatSummary(summary), seq.version.newerThanParser);
     $("pulseqPlay").disabled = false;
     $("pulseqPanel").classList.add("has-seq");
     $("pulseqMeta").textContent = loaded.name;

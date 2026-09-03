@@ -43,6 +43,24 @@
      * applies; the 0.01 covers a nominal 90 that rounds up through the shape quantization.
      */
     var EXCITATION_MAX_FLIP_DEG = 90.01;
+    /**
+     * What each v1.5 RF use letter does to the k-space trajectory. Inversion, saturation
+     * and preparation pulses act on longitudinal magnetization, so there is no transverse
+     * phase for them to restart or mirror and the trajectory runs on through them. That,
+     * and a refocusing pulse driven below 90 degrees to save power, are the cases the flip
+     * angle alone cannot tell apart.
+     */
+    var RF_USE = {
+        e: "excite",
+        r: "refocus",
+        i: "ignore",
+        s: "ignore",
+        p: "ignore",
+        o: "ignore"
+    };
+
+    /** Newest format whose event table layouts this parser knows, as major * 100 + minor. */
+    var NEWEST_KNOWN_FORMAT = 105;
 
     function parseVersionNumber(lines) {
         var major = 0, minor = 0, revision = 0;
@@ -52,7 +70,13 @@
             else if (parts[0] === "minor") minor = parseInt(parts[1], 10);
             else if (parts[0] === "revision") revision = parseInt(parts[1], 10);
         }
-        return { major: major, minor: minor, revision: revision, code: major * 10000 + minor * 100 + revision };
+        var code = major * 10000 + minor * 100 + revision;
+        // Every revision so far has inserted columns into the event tables, so a newer one
+        // has to be reported rather than read on the newest layout we happen to know.
+        return {
+            major: major, minor: minor, revision: revision, code: code,
+            newerThanParser: major * 100 + minor > NEWEST_KNOWN_FORMAT
+        };
     }
 
     function parseDefinitions(lines) {
@@ -144,10 +168,33 @@
 
     var num = function (x) { return parseFloat(x); };
     var intp = function (x) { return parseInt(x, 10); };
+    var text = function (x) { return x; };
 
+    /**
+     * Each format revision inserted columns into the middle of the event tables, so the
+     * layout has to be chosen by version: reading a v1.5 file as v1.4 takes the pulse
+     * centre for its delay and the first gradient sample for its shape id, which parses
+     * without complaint and means nothing.
+     */
     function parseRf(lines, versionCode) {
         // v1.2: amp mag_id phase_id delay freq phase
-        // v1.4: amp mag_id phase_id time_id delay freq phase [use_gz]
+        // v1.4: amp mag_id phase_id time_id delay freq phase
+        // v1.5: amp mag_id phase_id time_id center delay freq_ppm phase_ppm freq phase use
+        if (versionCode >= 10500) {
+            return parseNumericTable(lines, [
+                { name: "amp", parse: num, def: 0 },
+                { name: "mag_id", parse: intp, def: 0 },
+                { name: "phase_id", parse: intp, def: 0 },
+                { name: "time_id", parse: intp, def: 0 },
+                { name: "center", parse: num, def: 0 },
+                { name: "delay", parse: num, def: 0 },
+                { name: "freq_ppm", parse: num, def: 0 },
+                { name: "phase_ppm", parse: num, def: 0 },
+                { name: "freq", parse: num, def: 0 },
+                { name: "phase", parse: num, def: 0 },
+                { name: "use", parse: text, def: "" }
+            ]);
+        }
         if (versionCode >= 10400) {
             return parseNumericTable(lines, [
                 { name: "amp", parse: num, def: 0 },
@@ -170,6 +217,18 @@
     }
 
     function parseGradients(lines, versionCode) {
+        // v1.5 states the waveform value at the very start and end of the event, which
+        // the raster already carries, so the columns are read only to reach the shape ids.
+        if (versionCode >= 10500) {
+            return parseNumericTable(lines, [
+                { name: "amp", parse: num, def: 0 },
+                { name: "first", parse: num, def: 0 },
+                { name: "last", parse: num, def: 0 },
+                { name: "shape_id", parse: intp, def: 0 },
+                { name: "time_id", parse: intp, def: 0 },
+                { name: "delay", parse: num, def: 0 }
+            ]);
+        }
         if (versionCode >= 10400) {
             return parseNumericTable(lines, [
                 { name: "amp", parse: num, def: 0 },
@@ -182,6 +241,30 @@
             { name: "amp", parse: num, def: 0 },
             { name: "shape_id", parse: intp, def: 0 },
             { name: "delay", parse: num, def: 0 }
+        ]);
+    }
+
+    function parseAdc(lines, versionCode) {
+        // v1.2/v1.4: num dwell delay freq phase
+        // v1.5:      num dwell delay freq_ppm phase_ppm freq phase phase_id
+        if (versionCode >= 10500) {
+            return parseNumericTable(lines, [
+                { name: "num", parse: intp, def: 0 },
+                { name: "dwell", parse: num, def: 0 },
+                { name: "delay", parse: num, def: 0 },
+                { name: "freq_ppm", parse: num, def: 0 },
+                { name: "phase_ppm", parse: num, def: 0 },
+                { name: "freq", parse: num, def: 0 },
+                { name: "phase", parse: num, def: 0 },
+                { name: "phase_id", parse: intp, def: 0 }
+            ]);
+        }
+        return parseNumericTable(lines, [
+            { name: "num", parse: intp, def: 0 },
+            { name: "dwell", parse: num, def: 0 },
+            { name: "delay", parse: num, def: 0 },
+            { name: "freq", parse: num, def: 0 },
+            { name: "phase", parse: num, def: 0 }
         ]);
     }
 
@@ -298,13 +381,7 @@
             { name: "fall", parse: num, def: 0 },
             { name: "delay", parse: num, def: 0 }
         ]);
-        this.adc = parseNumericTable(sections.ADC || [], [
-            { name: "num", parse: intp, def: 0 },
-            { name: "dwell", parse: num, def: 0 },
-            { name: "delay", parse: num, def: 0 },
-            { name: "freq", parse: num, def: 0 },
-            { name: "phase", parse: num, def: 0 }
-        ]);
+        this.adc = parseAdc(sections.ADC || [], this.version.code);
         this.delays = parseNumericTable(sections.DELAYS || [], [
             { name: "delay", parse: intp, def: 0 }
         ]);
@@ -419,6 +496,9 @@
      */
     Sequence.prototype.rfCenterS = function (rf) {
         if (!rf) return 0;
+        // From v1.5 the file states this outright, which is the authority for a pulse
+        // whose effective rotation does not sit under the peak of its envelope.
+        if (rf.center > 0) return rf.center * 1e-6;
         var mag = shapeSamples(this.shapes, rf.mag_id);
         if (!mag.length) return 0;
         var times = shapeTimes(this.shapes, rf.time_id, this.rasters.rf);
@@ -440,8 +520,9 @@
 
     /**
      * Absolute times of the RF pulses, split by what they do to the k-space trajectory.
-     * Port of pypulseq's Sequence.rf_times, with the use inferred as described at
-     * EXCITATION_MAX_FLIP_DEG because the file format does not carry it.
+     * Port of pypulseq's Sequence.rf_times. A v1.5 file says what each pulse is for and is
+     * taken at its word; below that the use is inferred from the flip angle, as described
+     * at EXCITATION_MAX_FLIP_DEG.
      */
     Sequence.prototype.rfTimes = function () {
         var excitations = [];
@@ -451,9 +532,14 @@
             var b = this.blocks[i];
             var rf = b.rf ? this.rf[b.rf] : null;
             if (rf) {
+                var use = RF_USE[rf.use];
+                if (!use) {
+                    use = Math.abs(this.rfFlipDeg(rf)) < EXCITATION_MAX_FLIP_DEG
+                        ? "excite" : "refocus";
+                }
                 var centre = t + (rf.delay || 0) * 1e-6 + this.rfCenterS(rf);
-                if (Math.abs(this.rfFlipDeg(rf)) < EXCITATION_MAX_FLIP_DEG) excitations.push(centre);
-                else refocusings.push(centre);
+                if (use === "excite") excitations.push(centre);
+                else if (use === "refocus") refocusings.push(centre);
             }
             t += this.blockDurationUs(b) * 1e-6;
         }
@@ -516,9 +602,13 @@
             if (local < 0) return 0;
             var times = shapeTimes(this.shapes, g.time_id, this.rasters.grad);
             if (times) return g.amp * interpAtTimes(times, samples, local);
-            var idx = local / this.rasters.grad;
-            if (idx >= samples.length) return 0;
-            return g.amp * interpShape(samples, idx);
+            // With no time shape, Pulseq steps an arbitrary gradient at raster centres:
+            // sample i covers [i, i+1] rasters and sits in the middle of that, so the
+            // event runs the full n rasters and the outer half raster at either end holds
+            // the first and last sample. Sampling as if the first one sat at t=0 instead
+            // loses half a raster of area at each end of every shaped gradient.
+            if (local > samples.length * this.rasters.grad) return 0;
+            return g.amp * interpShape(samples, local / this.rasters.grad - 0.5);
         }
         return 0;
     };

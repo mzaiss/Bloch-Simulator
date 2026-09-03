@@ -11,6 +11,10 @@ function readSeq(name) {
     return fs.readFileSync(path.join(seqDir, name), "utf8");
 }
 
+function readFixture(name) {
+    return fs.readFileSync(path.join(__dirname, "fixtures", name), "utf8");
+}
+
 function almost(a, b, tol, msg) {
     assert.ok(Math.abs(a - b) <= tol, (msg || "") + " expected " + b + " got " + a);
 }
@@ -379,6 +383,75 @@ function replay(wf, fps, stretch, gradScale) {
     });
 })();
 
+(function testV15Format() {
+    // v1.5 inserted columns into the middle of the RF, gradient and ADC tables, so reading
+    // one on the v1.4 layout takes the pulse centre for its delay and the first gradient
+    // sample for its shape id — which parses cleanly and means nothing. The fixture is a
+    // four-echo spin echo train written by pypulseq 1.5; every value asserted here is one
+    // pypulseq's own calculate_kspace agrees with to the digit.
+    var seq = Pulseq.parse(readFixture("v15_tse_8.seq"));
+    assert.strictEqual(seq.version.code, 10500, "v1.5 file");
+    assert.strictEqual(seq.version.newerThanParser, false, "v1.5 is within the parser");
+
+    // The RF table: amplitudes still line up, so the flips come out right, and the centre
+    // and use columns are picked up rather than being read as a delay.
+    var flips = seq.summary().flips;
+    assert.deepStrictEqual(flips, [180, 90, 60, 60, 60, 60], "flips through the v1.5 layout");
+    var rf = seq.rf[seq.blocks.filter(function (b) { return b.rf; })[0].rf];
+    almost(seq.rfCenterS(rf), 250e-6, 1e-9, "centre of the 500 us block pulse");
+    assert.strictEqual(rf.delay, 0, "delay column, not the centre");
+
+    // A shaped slice select proves the [GRADIENTS] first/last columns are consumed: read
+    // as v1.4 the shape id would come out as the first sample value, leaving gz empty.
+    var gz = seq.gradients[Object.keys(seq.gradients)[0]];
+    almost(gz.amp, 4000, 1, "arbitrary gradient amplitude");
+    assert.ok(seq.shapes[gz.shape_id] && seq.shapes[gz.shape_id].samples.length === 50,
+        "shape id must point at the 50 sample slice select, got " + gz.shape_id);
+
+    var wf = seq.rasterize(seq.suggestedRaster());
+    var peakGz = 0;
+    for (var i = 0; i < wf.n; i++) peakGz = Math.max(peakGz, Math.abs(wf.gz[i]));
+    almost(peakGz, 4000, 5, "slice select has to reach the plane");
+
+    // Pulseq puts sample i of an arbitrary gradient at (i + 0.5) rasters and runs the
+    // event for the full n rasters, so its area is exactly raster * sum(samples). Reading
+    // the first sample as if it sat at t=0 instead loses half a raster at either end.
+    var samples = seq.shapes[gz.shape_id].samples;
+    var sum = 0;
+    for (var s = 0; s < samples.length; s++) sum += samples[s];
+    var analytic = gz.amp * sum * seq.rasters.grad;
+    var fine = seq.rasterize(0.05e-6);
+    var area = Pulseq.meanOver(fine, 0, fine.duration).gz * fine.duration;
+    almost(area, analytic, Math.abs(analytic) * 1e-4, "arbitrary gradient area");
+
+    // The use field carries what the flip angle cannot: 60 degree refocusing pulses that
+    // the flip-angle rule would call excitations, and a leading inversion pulse it would
+    // call a refocusing. Trusting the angle here would restart the trajectory at every
+    // echo and mirror one that does not exist yet.
+    assert.strictEqual(wf.excitationTimes.length, 1, "one excitation, from the use field");
+    assert.strictEqual(wf.refocusTimes.length, 4, "four refocusings, from the use field");
+    almost(wf.excitationTimes[0], 5.75e-3, 1e-9, "excitation at its declared centre");
+    var byAngle = flips.filter(function (f) { return f < 90.01; }).length;
+    assert.strictEqual(byAngle, 5, "the flip angle alone would find 5 excitations here");
+
+    // 8 samples per echo over a 1 m field of view, so every sample sits on a whole 1/m.
+    var k = Pulseq.calculateKspace(wf);
+    assert.strictEqual(k.tAdc.length, 32, "4 echoes of 8 samples");
+    var expectKx = [-3.5, -2.5, -1.5, -0.5, 0.5, 1.5, 2.5, 3.5];
+    for (var s = 0; s < 32; s++) {
+        almost(k.kxAdc[s], expectKx[s % 8], 0.01, "kx sample " + s);
+        almost(k.kyAdc[s], Math.floor(s / 8) - 1.5, 0.01, "ky sample " + s);
+    }
+    almost(k.radiusMaxAdc, Math.hypot(3.5, 1.5), 0.01, "corner of k-space");
+    console.log("ok v1.5 format: flips " + flips.join("/") + ", 4 echoes of 8 samples on " +
+        "the 1 1/m grid, corner at " + k.radiusMaxAdc.toFixed(4) + " 1/m");
+
+    // A format past v1.5 has to be reported, not read on the newest layout we know.
+    var future = Pulseq.parse(readFixture("v15_tse_8.seq").replace("minor 5", "minor 6"));
+    assert.strictEqual(future.version.newerThanParser, true, "v1.6 is past the parser");
+    console.log("ok unknown format flagged: v1.6 reports newerThanParser");
+})();
+
 (function testGradientDisplayFactor() {
     // Normalized display puts the same winding across the sample whatever field of view
     // and matrix a sequence was written for, so every example is comparable: the target is
@@ -518,10 +591,21 @@ function replay(wf, fps, stretch, gradScale) {
     var sum = seq.summary();
     assert.strictEqual(sum.version, "1.4.2");
     // Matches the TotalDuration the file declares, with the 0.5 s tail block removed.
-    almost(sum.duration, 0.10973, 1e-9, "spiral TSE duration");
+    almost(sum.duration, 0.10491, 1e-9, "spiral TSE duration");
     assert.strictEqual(sum.nRf, 5);
     almost(sum.flips[0], 90, 0.5, "excitation");
     for (var i = 1; i < sum.flips.length; i++) almost(sum.flips[i], 180, 0.5, "refocus " + i);
+
+    // CPMG: the refocusing axis is 90 degrees from the excitation, so the flip angle error
+    // of each pulse alternates down the echo train instead of accumulating.
+    var rfById = Object.keys(seq.rf).map(function (id) { return seq.rf[id]; });
+    almost(rfById[0].phase, 0, 1e-4, "excitation phase");
+    almost(rfById[1].phase, Math.PI / 2, 1e-4, "refocusing phase, 90 deg from excitation");
+
+    // Both pulses are 1.25 ms and 1 ms of shape, at twice the amplitude the 2.5 ms and
+    // 2 ms versions needed for the same flip angle.
+    almost(seq._rfDurationUs(rfById[0]) - rfById[0].delay, 1250, 1, "excitation shape");
+    almost(seq._rfDurationUs(rfById[1]) - rfById[1].delay, 1000, 1, "refocusing shape");
 
     // Normalized RF magnitude shapes are the tell-tale of correct decompression.
     for (var id in seq.rf) {
@@ -543,7 +627,7 @@ function replay(wf, fps, stretch, gradScale) {
         maxGy = Math.max(maxGy, Math.abs(wf.gy[j]));
         if (Math.abs(wf.gx[j]) > 1 && Math.abs(wf.gy[j]) > 1) both++;
     }
-    almost(peakRf, 987.454, 1, "peak RF should match the [RF] amplitude");
+    almost(peakRf, 1974.89, 2, "peak RF should match the [RF] amplitude");
     assert.ok(maxGx > 1e6 && maxGy > 1e6, "spiral gradients " + maxGx + " " + maxGy);
     assert.ok(both > 1000, "a spiral runs Gx and Gy together, samples: " + both);
 
