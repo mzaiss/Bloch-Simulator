@@ -937,6 +937,14 @@
             outX[w] = second * dtX;
             outY[w++] = y[second];
         }
+        // Each channel picks its own representative samples, so the ends of the series
+        // land wherever its first and last extremum happen to be, up to a bin short of
+        // the sequence. Pinning them puts every channel on one x domain, which is what
+        // lets the plot rows share a zoom window expressed as a percentage of it.
+        if (w > 1) {
+            outX[0] = 0;
+            outX[w - 1] = (n - 1) * dtX;
+        }
         return { x: outX.subarray(0, w), y: outY.subarray(0, w) };
     }
 

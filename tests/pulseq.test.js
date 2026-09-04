@@ -522,6 +522,18 @@ function replay(wf, fps, stretch, gradScale) {
         assert.ok(env.x[j] >= env.x[j - 1], "x must not go backwards at " + j);
     }
 
+    // Two channels of one sequence must come out on exactly the same x domain, whatever
+    // their shape: the plot rows share a zoom window given as a percentage of it, so an
+    // extent that differed by a bin would slide the rows apart as the zoom went in.
+    var other = new Float64Array(n);
+    for (var m = 0; m < n; m++) other[m] = (m % 7 === 0) ? 1 : 0; // extrema land elsewhere
+    var envOther = Pulseq.envelopeSeries(other, n, 0.001, maxPoints);
+    almost(env.x[0], 0, 0, "envelope starts at t=0");
+    almost(env.x[env.x.length - 1], (n - 1) * 0.001, 1e-9, "envelope reaches the last sample");
+    almost(envOther.x[0], env.x[0], 0, "both channels start together");
+    almost(envOther.x[envOther.x.length - 1], env.x[env.x.length - 1], 0,
+        "both channels end together");
+
     // Short inputs pass through untouched.
     var small = Pulseq.envelopeSeries(new Float64Array([0, 1, 2]), 3, 2, maxPoints);
     assert.deepStrictEqual(Array.from(small.x), [0, 2, 4], "x from index * dtX");

@@ -47,6 +47,7 @@ happens in spare time, bug reports and software suggestions may largely be ignor
   <script src="https://unpkg.com/three@0.124.0/examples/js/controls/OrbitControls.js"></script>
   <script src="https://unpkg.com/dat.gui@0.7.7/build/dat.gui.min.js"></script>
   <script src="js/pulseq.js"></script>
+  <script src="js/inhom.js"></script>
   
   <!-- Check https://learn.jquery.com/jquery-ui/getting-started/ for intro. -->
   <!-- jquery-mobile seems not worth the effort in this case. -->
@@ -271,6 +272,8 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 	const fpsInterval = 1000/70; //set at 30 to keep more constant rate or free CPU.
 	          // Will never be more than 60 (writing 70 makes it 60, if possible).
 	const Tmax = 10; // maxmum finite relaxation time
+	const T2dashDefault = 6; // spread the inhomogeneity scenes have always had
+	const T2dashMin = 0.5; // faster than the fan can be followed by eye
 	const B0max = 6;
 	var savedState = {}; // used to save common parameters.
 	var savedState2 = []; // used to save isochromate's parameters.
@@ -444,6 +447,7 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 	function Isoc(M, color, pos, nElem, showCurve, dR1, dR2, M0, dRadius) {  //isocromate constructor
 	    this.M = M.clone();
 	    this.dB0 = 0; //spatially independent field offset
+	    this.inhomUnit = 0; //dB0 in units of the T2' spread, 0 if not from one
 	    this.detuning = 0; // total field offset from RF freq
 	    this.dMRF = new THREE.Vector3(0, 0, 1);
 	    this.color = color; // don't clone since color-pointer is used as identifier.
@@ -518,6 +522,24 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 
 	function removeIsocArr() {
 	    state.IsocArr.forEach(function (item, index) {item.remove()});
+	}
+
+	// Field offset of every isochromate belonging to a T2' distribution, from the
+	// current T2'. The offsets are held in units of the distribution's width, so this
+	// is a rescale: no geometry is rebuilt, which is what lets the slider stay live
+	// with the 1089 isochromates of Plane Inhom. Isochromates whose dB0 means
+	// something else, the chemical shifts of the substance scenes, carry no unit
+	// offset and are left alone.
+	function applyT2dash(isocArr) {
+	    let T2dash = (state.T2dash < T2dashMin) ? T2dashMin : state.T2dash;
+	    let hwhm = Inhom.hwhm(T2dash, state.Gamma);
+	    isocArr.forEach(function (isoc) {
+		if (isoc.inhomUnit) isoc.dB0 = isoc.inhomUnit * hwhm;
+	    });
+	}
+
+	function sampleHasT2dash() {
+	    return state.IsocArr.some(function (isoc) {return isoc.inhomUnit != 0});
 	}
 
 	
@@ -737,6 +759,7 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 			     B0:2.,
 //			     t:0, //removed to avoid resetting of FID. Seems ok.
 			     dt:0.01, phi1:0., T1:Infinity, T2:Infinity, B1freq: 2,
+			     T2dash: T2dashDefault,
 			     Name:'', RFfunc:RFconst,
 			     viewB1:true, viewTorqB1eff:false,
 			     FrameStat:false, FrameB0:true, FrameB1:false};
@@ -755,26 +778,14 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 		      RFfunc:RFconst,
 		      viewMx:true}; }
 	
-	    // Field offsets of an nIsoc-strong T2' distribution: dense near resonance with
-	    // long tails, so the sum decays instead of recurring. Shared, so a sample built
-	    // from the distribution dephases at the same rate wherever it is used.
-	    function inhomOffsets(nIsoc) {
-		const spreadScale = 1/6; 
-		const nonlinScale = Math.PI/1.5; //reduces recovery
-		let offsets = [];
-		for(let i=0; i<nIsoc; i++)
-		    offsets.push(
-			Math.tan( (i-(nIsoc-1)/2) / (nIsoc/nonlinScale) ) * spreadScale);
-		return offsets;
-	    } //inhomOffsets
-
 	    scenes.IsocInhomN = function (nIsoc) {
 		let inhom = {IsocArr:[]};
-		let offsets = inhomOffsets(nIsoc);
+		let units = Inhom.unitOffsets(nIsoc);
 		for(let i=0; i<nIsoc; i++) {
 		    inhom.IsocArr.push(IsocZ());
-		    inhom.IsocArr[i].dB0 = offsets[i];
+		    inhom.IsocArr[i].inhomUnit = units[i];
 		}
+		applyT2dash(inhom.IsocArr);
 		return inhom;
 	    } //IsocInhomN
 	    
@@ -916,7 +927,7 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 		const nIsoc = 11;  // odd, so one position sits at the centre.
 		const nInhom = 9;  // as scenes.Inhomogeneity.
 		const step = 0.8;  // Plane's extent, sampled half as finely.
-		let offsets = inhomOffsets(nInhom);
+		let units = Inhom.unitOffsets(nInhom);
 		var plane = [];
 		// Distribution outermost, so consecutive isochromates step along x at a
 		// fixed offset: Gx refocus reads its phase gradient off neighbouring pairs
@@ -929,9 +940,10 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 			    // deep, the facets cannot be seen.
 			    let isoc = new Isoc(z, white, nullvec, 4);
 			    isoc.pos.set((j-(nIsoc-1)/2)*step, (i-(nIsoc-1)/2)*step, 0);
-			    isoc.dB0 = offsets[k];
+			    isoc.inhomUnit = units[k];
 			    plane.push(isoc);
 			}
+		applyT2dash(plane);
 		return {IsocArr: plane, allScale: 0.35};
 	    }
 	    
@@ -1134,7 +1146,7 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 		    B1: 0,
 		    B1freq: 0, //angular frequency
 		    phi1: 0,  //RF phase in rotating frame.
-		    T1:1, T2:1,
+		    T1:1, T2:1, T2dash: T2dashDefault,
 		    Gx:0, Gy:0,
 		    viewB1:true, viewTorqB1eff:false,
 		    viewMxy:true, viewMx:true, viewMz:false, viewB1x:false, 
@@ -1193,7 +1205,7 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 				 let tmp = state.Sample; //state.Sample is inadvertently changed by folder creation. Weirdly, the temporary saving of state cannot be moved to guiAddFolder. General problem.
 				 guiFolder.add(state, 'Sample', savedFlag ? [ state.Sample] :
 					       ['1 isochromate',
-						'7 isochromates',
+						'9 isochromates',
 						'3 substances',
 						'Line',
 						'Line, dense',
@@ -1208,18 +1220,24 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 			     cFolder++, createFromFolder--);
 	    }
 	
+	    // T2' is offered only where the sample carries a spread of field offsets for
+	    // it to set the width of: elsewhere it would be a control over nothing.
+	    let hasT2dash = sampleHasT2dash();
 	    let relaxStr;
 	    if ((state.T1 == Infinity) && (state.T2 == Infinity))
-		relaxStr = 'Off'
+		relaxStr = hasT2dash ? 'T1,T2 off' : 'Off'
 	    else if (state.T1 == Infinity)
 		relaxStr = 'T1 off, T2='+state.T2
 	    else
 		relaxStr = 'T1='+state.T1+', T2='+state.T2;	    
+	    if (hasT2dash)
+		relaxStr += (state.T2dash == Infinity) ? ", T2' off"
+		: ", T2'="+state.T2dash;
 	    
 	    guiAddFolder('Relaxation: '+relaxStr,
 			 'Relaxation',
 			 function (guiFolder) {
-			     let tmp2 = state.T1, tmp3 = state.T2;
+			     let tmp2 = state.T1, tmp3 = state.T2, tmp4 = state.T2dash;
 			     // .listen() is needed to ensure T2<T1, but disables text
 			     // input without patching dat.gui: "Allows NumberSlider and
 			     // Box to be edited during .listen()" (github page):
@@ -1243,7 +1261,21 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 					 state.T1 = Infinity;
 				     }
 				 });
-			     state.T1 = tmp2; state.T2 = tmp3;},
+			     // The reversible part: the half width of the sample's spread
+			     // of frequencies, so a spin echo brings this dephasing back
+			     // and T2 dephasing stays lost. No T1 or T2 coupling to keep,
+			     // hence no .listen() and hence typed values work.
+			     if (hasT2dash)
+				 guiFolder.add(state, 'T2dash', T2dashMin, Tmax, 0.5).
+				 name("T2'").onChange(
+				     function () {
+					 if (state.T2dash == Tmax) {
+					     state.T2dash = Infinity; //no spread
+					     this.updateDisplay(); //so the box says so.
+					 }
+					 applyT2dash(state.IsocArr);
+				     });
+			     state.T1 = tmp2; state.T2 = tmp3; state.T2dash = tmp4;},
 			 cFolder++, createFromFolder--);
 	    
 	    guiViewsFolder = cFolder; // folder index is needed to update FID labels.
@@ -1678,6 +1710,7 @@ happens in spare time, bug reports and software suggestions may largely be ignor
 		    item.M.y = saved.My;
 		    item.M.z = saved.Mz;
 		});
+		applyT2dash(state.IsocArr); //T2' came back with the state, so must the offsets.
 		updateMenuList.push(2); // trigger dat-gui update of all but first folders.
 		break;
 	    default : alert("Button with no action pressed: "+label);
